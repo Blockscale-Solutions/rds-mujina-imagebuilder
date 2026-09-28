@@ -1,0 +1,38 @@
+# Inputs to the chain UART arithmetic gate (tools/uart-budget, #27) that are
+# not facts about an FPGA block. Those live in hw.toml. Each cost is
+# [low, high] from public measurements on the nearest hardware found. None
+# was measured on this board; the unit campaign (#65) replaces them.
+
+[line]
+baud = 5000000          # REQ-UART-2
+bits_per_char = 11      # start + 9 data + stop (#14)
+source = "REQ-UART-2; 9-bit framing, #14"
+
+[traffic]
+# REQ-UART-8: no loss at ten times the 10.6 KB/s a three-board mining window
+# recorded (MJ-HASH-06). One wire byte is one 9-bit character.
+chars_per_s_total = 106000
+source = "REQ-UART-8"
+
+[cost]
+# One uncached 32-bit read over the full HPS-to-FPGA bridge, Cyclone V at
+# 800 MHz, Linux userspace mmap: 139-285 ns by fabric clock 200-50 MHz; the
+# same read without an OS was 345-449 ns (UviDTE-FPSoC CycloneVSoC-time-
+# measurements, IEEE TIE 2018 data). The fabric clock of our bitstream is not
+# known, so the range spans both.
+read_us = [0.14, 0.45]
+# One userspace wake through UIO: about 20 us per interrupt on Zynq (dual
+# Cortex-A9) with generic-uio (harmoninstruments.com/posts/uio.html); 12.6 us
+# for an lmbench two-process context switch on an i.MX6Q (Cortex-A9), 4.4.
+wake_us = [12, 20]
+# Worst interrupt-to-thread latency under load, for kernel_preemption below.
+# PREEMPT on an i.MX6Q (Cortex-A9), 6.6.52, cyclictest: idle max 97 us,
+# loaded max 857 us (reliableembeddedsystems.com, degrees of real-time 6.6.x).
+# A UIO wake adds the interrupt path to cyclictest's timer path, so the high
+# end is rounded up to 1 ms. PREEMPT_NONE reached 3,051 us on the same board,
+# and ARM32 cannot select PREEMPT_RT in mainline 6.18.
+kernel_preemption = "PREEMPT"
+latency_us = [100, 1000]
+budget_core = 0.2       # a fifth of one core while mining (#14)
+margin = 0.5            # the drain must start within half the fill time (ours)
+source = "public measurements named above; budget #14; margin ours"

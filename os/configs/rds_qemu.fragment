@@ -1,0 +1,9 @@
+# QEMU vexpress-a9: the same CPU class, for hardware-free tests.
+BR2_LINUX_KERNEL_DEFCONFIG="vexpress"
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="arm/vexpress-v2p-ca9"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_RDS_PATH)/board/common/linux.fragment $(BR2_EXTERNAL_RDS_PATH)/board/rds-qemu/linux.fragment"
+# Test apparatus: MTD tools and the guest test runner (rds.test=NAME).
+BR2_PACKAGE_MTD=y
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_RDS_PATH)/board/rds-qemu/overlay"
+# Test apparatus for #51: the canary probe module.
+BR2_PACKAGE_RDS_CANARY_PROBE=y

@@ -1,0 +1,15 @@
+# Every RDS kernel, any variant: it must mount the root it is built with (#77).
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+# Until stock is retired, any UBIFS we create must be format 4, which the
+# vendor 4.9 kernel mounts read-write; 6.18 defaults to 5 (#52). Built in and
+# appended after the bootloader's arguments, so every boot path carries it.
+CONFIG_CMDLINE="ubifs.default_version=4"
+CONFIG_CMDLINE_EXTEND=y
+# A failure keeps its evidence (G7, #58): the kernel log goes off the unit over
+# netconsole, and an oops survives a warm reset in pstore (ramoops, a region
+# reserved in the board DT).
+CONFIG_NETCONSOLE=y
+CONFIG_PSTORE=y
+CONFIG_PSTORE_RAM=y
+CONFIG_PSTORE_CONSOLE=y

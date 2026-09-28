@@ -1,0 +1,18 @@
+#!/bin/sh
+# #52: a UBIFS our kernel creates is on-flash format 4 with no double-hash
+# flag, so the stock 4.9 kernel can mount it read-write. rds.twin=1 sets the
+# parameter to 5 at run time first: the instrument check that this test can
+# see a format-5 superblock at all.
+. /usr/libexec/rds-test/lib.sh
+n=$(nand_mtd); [ -n "$n" ] || { echo "error=no-nandsim-device"; exit 0; }
+p=/sys/module/ubifs/parameters/default_version
+param=$(cat $p 2>/dev/null || echo none)
+grep -q 'rds.twin=1' /proc/cmdline && echo 5 > $p
+ubiattach -m ${n#mtd} -d 0 >/dev/null 2>&1; a=$?
+ubimkvol /dev/ubi0 -N t -s 2MiB >/dev/null 2>&1; v=$?
+mkdir -p /tmp/u; mount -t ubifs ubi0:t /tmp/u >/dev/null 2>&1; m=$?
+umount /tmp/u 2>/dev/null
+field() { dd if=/dev/ubi0_0 bs=1 skip=$1 count=4 2>/dev/null | od -An -t$2 | tr -d ' '; }
+media=$(dmesg | sed -n 's/.*media format: w\([0-9]*\)\/r[0-9]*.*/\1/p' | tail -1)
+flags=$(field 28 u4); dh=$(( flags & 8 ))
+echo "dev=$n param=$param attach=$a mkvol=$v mount=$m magic=$(field 0 x4) media_w=${media:-none} fmt=$(field 80 u4) flags=$flags double_hash=$([ $dh -ne 0 ] && echo yes || echo no)"

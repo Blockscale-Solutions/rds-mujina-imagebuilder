@@ -1,0 +1,21 @@
+RDS Mujina image builder: notices
+
+Names and logos. The Reckless Systems, 256 Foundation and Blockscale Solutions
+names and logos are their owners' marks.
+They are not covered by the code licence (LICENSE), and nothing in this
+repository grants any right to use them.
+
+Intel is named to identify the hardware this builds for; nothing here is
+Intel's, and nothing here is endorsed by Intel.
+
+Third-party public files, carried as their owners published them and not
+covered by LICENSE:
+  env/keys/buildroot-release.gpg      Buildroot's public release-signing key
+  env/keys/kernel-org-autosigner.gpg  kernel.org's public checksum-signing key
+  tests/fixtures/buildroot-2026.08.tar.xz.sign
+                                      Buildroot's signed checksums for 2026.08
+  tests/fixtures/kernel-v6.x-sha256sums.asc
+                                      kernel.org's signed checksum list
+
+The FPGA bitstream, MCU firmware and every other vendor file stay on the
+owner's unit. None of them is in this repository or in an image it builds.

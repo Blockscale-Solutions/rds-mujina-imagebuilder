@@ -1,0 +1,27 @@
+#!/bin/sh
+# #80 (review T7): each userspace route to a write in this image, with the
+# layer that refused it and the chip's program and erase counts across that
+# route alone. The raw text of each route goes to the console as evidence.
+. /usr/libexec/rds-test/lib.sh
+n=$(nand_mtd); [ -n "$n" ] || { echo "error=no-nandsim-device"; exit 0; }
+es=$(cat /sys/class/mtd/$n/erasesize); ws=$(cat /sys/class/mtd/$n/writesize)
+blk=/dev/mtdblock${n#mtd}
+[ -b "$blk" ] && present=yes || present=no
+dd if=/dev/urandom of=/tmp/page bs=$ws count=1 2>/dev/null
+before=$(raw_hash $n)
+line=""
+route() { # name command...: appends name_rc, name_layer, name_dprog, name_derase
+    name=$1; shift
+    p0=$(dmesg | grep -c 'programm page'); e0=$(dmesg | grep -c 'erase sector')
+    out=$("$@" 2>&1); rc=$?
+    echo "rds-test routes: $name rc=$rc: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" > /dev/console
+    line="$line ${name}_rc=$rc ${name}_layer=$(layer "$out") ${name}_dprog=$(( $(dmesg | grep -c 'programm page') - p0 )) ${name}_derase=$(( $(dmesg | grep -c 'erase sector') - e0 ))"
+}
+# Each route gets its own erase block, clear of block 0 and the table area.
+route mtd_debug mtd_debug erase /dev/$n $((8 * es)) $es
+route flashcp flashcp /tmp/page /dev/$n
+route nandtest nandtest -p 1 -o $((9 * es)) -l $es /dev/$n
+route flash_lock flash_lock -l /dev/$n $((11 * es)) 1
+[ $present = yes ] && route mtdblock dd if=/tmp/page of=$blk bs=512 count=1 seek=$((10 * es / 512)) conv=fsync
+after=$(raw_hash $n); [ "$before" = "$after" ] && same=yes || same=no
+echo "dev=$n mtdblock_present=$present canary=$(said 'canary mode: ') $(state $n)$line raw_unchanged=$same"

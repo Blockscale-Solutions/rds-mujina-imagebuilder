@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Image versions: derived from git, strictly ordered (#22, gate C6).
+
+    tools/version current [--repo DIR]            rds-X.Y.Z-N-g<hash>-<epoch>
+    tools/version compare A B                     exit 0 same, 10 A newer, 11 A older, 2 refused
+    tools/version allow-install CURRENT CANDIDATE [--reinstall] [--downgrade]
+                                                  exit 0 allowed, 1 refused by policy, 2 unparseable
+
+Order is (X, Y, Z, N): release, then commits since its tag. The epoch is the
+commit time (SOURCE_DATE_EPOCH) and never decides order. Two versions at the
+same position with different commits cannot be ordered and are refused. A
+later field never outvotes an earlier one: nothing here accepts a version
+because any single field is larger.
+"""
+import argparse, re, subprocess, sys
+
+RE = re.compile(r"^rds-(\d+)\.(\d+)\.(\d+)-(\d+)-g([0-9a-f]{7,40})-(\d+)$")
+
+
+def parse(v):
+    m = RE.match(v)
+    if not m:
+        return None
+    x, y, z, n, h, e = m.groups()
+    return (int(x), int(y), int(z), int(n)), h, int(e)
+
+
+def compare(a, b):
+    pa, pb = parse(a), parse(b)
+    if not pa or not pb:
+        return 2, f"unparseable: {a if not pa else b}"
+    if pa[0] != pb[0]:
+        return (10, "newer") if pa[0] > pb[0] else (11, "older")
+    if pa[1] != pb[1]:
+        return 2, "same position, different commits: cannot be ordered"
+    return 0, "same"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("current"); c.add_argument("--repo", default=".")
+    k = sub.add_parser("compare"); k.add_argument("a"); k.add_argument("b")
+    i = sub.add_parser("allow-install"); i.add_argument("current"); i.add_argument("candidate")
+    i.add_argument("--reinstall", action="store_true"); i.add_argument("--downgrade", action="store_true")
+    a = ap.parse_args()
+    if a.cmd == "current":
+        g = lambda *args: subprocess.run(["git", "-C", a.repo, *args], capture_output=True, text=True)
+        if g("status", "--porcelain").stdout.strip():
+            print("version: working tree is dirty: refused"); sys.exit(1)
+        d = g("describe", "--tags", "--long", "--match", "v[0-9]*", "--abbrev=7")
+        m = re.match(r"^v(\d+\.\d+\.\d+)-(\d+)-g([0-9a-f]+)$", d.stdout.strip())
+        if d.returncode or not m:
+            print(f"version: no v<X.Y.Z> tag reachable: {d.stderr.strip()}"); sys.exit(1)
+        epoch = g("log", "-1", "--format=%ct").stdout.strip()
+        print(f"rds-{m[1]}-{m[2]}-g{m[3]}-{epoch}"); return
+    if a.cmd == "compare":
+        rc, why = compare(a.a, a.b); print(why); sys.exit(rc)
+    rc, why = compare(a.candidate, a.current)
+    if rc == 2:
+        print(f"refused: {why}"); sys.exit(2)
+    ok = rc == 10 or (rc == 0 and a.reinstall) or (rc == 11 and a.downgrade)
+    print(("allowed: " if ok else "refused: ") + {10: "newer", 0: "same version", 11: "older"}[rc])
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Every committed kernel patch is present, byte for byte, in each built tree (#51, T2).
+#
+#   tools/patch-identity [--patches DIR] TREE...
+#
+# A tree carries a patch exactly when the patch reverse-applies to it cleanly
+# (dry run; nothing is changed). Exit 0 when every patch is in every tree, 1
+# when any is missing or differs, 2 when there are no patches or no trees.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+pdir=$here/../os/patches/linux
+[ "${1:-}" = --patches ] && { pdir=$2; shift 2; }
+shopt -s nullglob
+patches=("$pdir"/*.patch)
+[ ${#patches[@]} -gt 0 ] || { echo "patch-identity: no patches in $pdir: unmeasured"; exit 2; }
+[ $# -gt 0 ] || { echo "patch-identity: no trees given: unmeasured"; exit 2; }
+bad=0
+for t in "$@"; do
+    for p in "${patches[@]}"; do
+        if patch -R --dry-run -s -f -p1 -d "$t" < "$p" >/dev/null 2>&1; then
+            echo "ok   $(basename "$p") in $t"
+        else
+            echo "FAIL $(basename "$p") is not in $t exactly (missing, or a different revision)"; bad=1
+        fi
+    done
+done
+exit $bad

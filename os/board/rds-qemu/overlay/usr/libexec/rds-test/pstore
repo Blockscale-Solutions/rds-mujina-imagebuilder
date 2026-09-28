@@ -1,0 +1,13 @@
+#!/bin/sh
+# #58: a panic leaves its evidence twice: over netconsole as it happens, and in
+# pstore (ramoops) after the warm reset. First boot panics; the second reports.
+. /usr/libexec/rds-test/lib.sh
+mount -t pstore pstore /sys/fs/pstore 2>/dev/null
+f=$(ls /sys/fs/pstore/dmesg-ramoops-* 2>/dev/null | head -1)
+if [ -z "$f" ]; then
+    echo "rds-test pstore: marker $(cat /proc/sys/kernel/random/boot_id) panicking now" > /dev/kmsg
+    echo c > /proc/sysrq-trigger
+    sleep 10; echo "error=no-panic"; exit 0
+fi
+marker=$(sed -n 's/.*rds-test pstore: marker \([0-9a-f-]*\) panicking now.*/\1/p' "$f" | head -1)
+echo "boot=2 record=$(basename "$f") oops=$(grep -q 'sysrq triggered crash' "$f" && echo yes || echo no) marker=${marker:-none} console_record=$(ls /sys/fs/pstore/console-ramoops* >/dev/null 2>&1 && echo yes || echo no)"

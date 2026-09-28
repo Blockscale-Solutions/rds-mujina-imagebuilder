@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Chain UART arithmetic gate (#27; DESIGN 6.2 step 1).
+
+    tools/uart-budget [--hw HW.toml] COSTS.toml [--min-depth]
+
+Can a userspace driver serve every chain UART's receive FIFO, reading it
+over the bridge, inside both the FIFO's deadline and the control board's CPU
+budget? The verdict decides the access model in DESIGN 6.1:
+
+  userspace-irq     a userspace driver (UIO interrupt, timer backstop) keeps up
+  needs-dma-helper  it cannot, and the receive side has DMA for a kernel helper
+  kernel            it cannot, and there is no DMA
+
+The model, per bus, at line rate (a burst can arrive at any time):
+  fill      = rx_fifo_depth / (baud / bits_per_char)
+  deadline  = margin x fill           the drain must start inside it
+  period    = deadline - latency_us   the longest safe gap between services
+  wakes/s   = 1 / period              an upper bound: an interrupt-paced
+                                      driver wakes less at low traffic
+  cpu       = buses x wakes/s x wake_us + chars_per_s_total x read_us
+Userspace holds when every period is positive and cpu <= budget_core.
+
+The FIFO facts come from hw.toml's chain-uart blocks, the only home for them;
+the bus count is the number of those blocks. Costs and the sustained load
+come from COSTS.toml, each cost as [low, high]; latency_us holds only for the
+kernel_preemption it names, which the board kernel must request. The verdict is computed at
+both ends. When the ends disagree the result is UNDECIDED, and the inputs
+whose range decides it are named: they are what to measure next.
+
+--min-depth prints the smallest receive depth for which userspace holds at
+every cost in range, which needs no depth.
+
+Exit 0 with a verdict, 1 on a bad input, 2 when unmeasured or undecided.
+"""
+import argparse, math, os, sys, tomllib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+HW_DEFAULT = os.path.join(os.path.dirname(HERE), "os", "board", "rds-control", "hw.toml")
+RANGES = ("wake_us", "latency_us", "read_us")
+
+
+def die(code, msg):
+    print(f"uart-budget: {msg}")
+    sys.exit(code)
+
+
+def load(path):
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def buses(hw):
+    """The chain-uart blocks, each with its depth (None when absent) and DMA flag."""
+    out, errs = [], []
+    for b in hw.get("block", []):
+        if b.get("kind") != "chain-uart":
+            continue
+        if ("rx_fifo_depth" in b or "rx_dma" in b) and not b.get("fifo_source"):
+            errs.append(f"{b['name']}: FIFO facts have no fifo_source")
+        out.append({"name": b["name"], "depth": b.get("rx_fifo_depth"), "dma": b.get("rx_dma")})
+    return out, errs
+
+
+def end(costs, which):
+    """One end of every range: 0 is low (best), 1 is high (worst)."""
+    return {k: costs[k][which] for k in RANGES}
+
+
+def judge(bus_list, line, load_cps, c, budget, margin):
+    """(verdict, lines) at one set of costs."""
+    rate = line["baud"] / line["bits_per_char"]
+    lines, wakes, ok = [], 0.0, True
+    for b in bus_list:
+        fill = b["depth"] / rate * 1e6
+        deadline = margin * fill
+        period = deadline - c["latency_us"]
+        if period <= 0:
+            ok = False
+            lines.append(f"{b['name']}: fill {fill:.1f} us, deadline {deadline:.1f} us, "
+                         f"latency {c['latency_us']:g} us leaves no time to drain")
+            continue
+        wakes += 1e6 / period
+        lines.append(f"{b['name']}: fill {fill:.1f} us, deadline {deadline:.1f} us, "
+                     f"period {period:.1f} us, {1e6 / period:.1f} wakes/s")
+    waking = wakes * c["wake_us"] / 1e6
+    reading = load_cps * c["read_us"] / 1e6
+    if ok:
+        cpu = waking + reading
+        ok = cpu <= budget
+        lines.append(f"cpu {cpu:.3f} of a core ({waking:.3f} waking, {reading:.4f} reading), "
+                     f"budget {budget:g}")
+    if ok:
+        return "userspace-irq", lines
+    return ("needs-dma-helper" if all(b["dma"] for b in bus_list) else "kernel"), lines
+
+
+def min_depth(n_buses, line, load_cps, c, budget, margin):
+    """Smallest depth for which userspace holds at costs c, or None if none does."""
+    allowance = budget - load_cps * c["read_us"] / 1e6
+    if allowance <= 0:
+        return None
+    period = n_buses * c["wake_us"] / allowance          # us, the shortest the budget allows
+    fill = (period + c["latency_us"]) / margin             # us
+    return math.ceil(fill / 1e6 * line["baud"] / line["bits_per_char"] - 1e-9)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--hw", default=HW_DEFAULT)
+    ap.add_argument("costs")
+    ap.add_argument("--min-depth", action="store_true")
+    a = ap.parse_args()
+    hw, cf = load(a.hw), load(a.costs)
+    bus_list, errs = buses(hw)
+    if errs:
+        die(1, "; ".join(errs))
+    if not bus_list:
+        die(2, f"no chain-uart blocks in {a.hw}: UNMEASURED")
+    line, traffic, cost = cf.get("line", {}), cf.get("traffic", {}), cf.get("cost", {})
+    missing = [f"line.{k}" for k in ("baud", "bits_per_char") if k not in line]
+    missing += [f"traffic.{k}" for k in ("chars_per_s_total",) if k not in traffic]
+    missing += [f"cost.{k}" for k in RANGES + ("budget_core", "margin", "kernel_preemption") if k not in cost]
+    missing += [f"{s}.source" for s, t in (("line", line), ("traffic", traffic), ("cost", cost)) if not t.get("source")]
+    if missing:
+        die(2, "UNMEASURED: " + ", ".join(missing) + f" missing from {a.costs}")
+    for k in RANGES:
+        lo, hi = cost[k]
+        if not 0 <= lo <= hi:
+            die(1, f"cost.{k} must be [low, high] with 0 <= low <= high, got {cost[k]}")
+    load_cps, budget, margin = traffic["chars_per_s_total"], cost["budget_core"], cost["margin"]
+    rate = line["baud"] / line["bits_per_char"]
+    print(f"uart-budget: {len(bus_list)} buses, {rate:.0f} chars/s each at line rate; "
+          f"sustained load {load_cps:g} chars/s in total; latency for CONFIG_{cost['kernel_preemption']}")
+
+    if a.min_depth:
+        worst = min_depth(len(bus_list), line, load_cps, end(cost, 1), budget, margin)
+        best = min_depth(len(bus_list), line, load_cps, end(cost, 0), budget, margin)
+        if worst is None:
+            die(2, "reading alone exceeds the budget at the high costs: no depth serves userspace")
+        print(f"userspace-irq at every cost in range needs rx_fifo_depth >= {worst}"
+              f" (>= {best} at the low costs)")
+        return
+
+    unknown = [f"{b['name']}.{k}" for b in bus_list
+               for k, v in (("rx_fifo_depth", b["depth"]), ("rx_dma", b["dma"])) if v is None]
+    if unknown:
+        die(2, "UNMEASURED: " + ", ".join(unknown) + "; --min-depth gives the depth that would decide it")
+
+    verdicts = {}
+    for which, label in ((0, "low costs"), (1, "high costs")):
+        v, lines = judge(bus_list, line, load_cps, end(cost, which), budget, margin)
+        verdicts[which] = v
+        print(f"at the {label}: {v}")
+        for l in lines:
+            print(f"  {l}")
+    if verdicts[0] == verdicts[1]:
+        print(f"verdict: {verdicts[0]}")
+        return
+    deciders = [k for k in RANGES if cost[k][0] != cost[k][1]
+                and judge(bus_list, line, load_cps, {**end(cost, 1), k: cost[k][0]}, budget, margin)[0] == verdicts[0]]
+    ranged = [k for k in RANGES if cost[k][0] != cost[k][1]]
+    print(f"UNDECIDED: {verdicts[0]} at the low costs, {verdicts[1]} at the high; decided by: "
+          + (", ".join(deciders) if deciders else "no one input alone; jointly " + ", ".join(ranged)))
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

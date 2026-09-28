@@ -1,0 +1,8 @@
+#!/bin/sh
+# #51 T6: UBI attaches read-only and writes nothing in canary mode.
+. /usr/libexec/rds-test/lib.sh
+n=$(nand_mtd); [ -n "$n" ] || { echo "error=no-nandsim-device"; exit 0; }
+before=$(raw_hash $n)
+ubiattach -m ${n#mtd} >/dev/null 2>&1; attach_rc=$?
+after=$(raw_hash $n); [ "$before" = "$after" ] && same=yes || same=no
+echo "dev=$n attach_rc=$attach_rc ro_attach=$(said 'read-only mode') canary=$(said 'canary mode: ') $(chip_counts) raw_unchanged=$same"

@@ -1,0 +1,50 @@
+# UBI layouts for the RDS control board: the one home for volume sizes (#20).
+# Every other file reads sizes from here; tools/layout checks them.
+
+[device]
+leb_bytes = 126976
+# User LEBs on ubi0 (mtd1): the stock volumes fill it, and the vendor kernel's
+# attach log reports "available PEBs: 0" (4060 reserved, 74 for bad-PEB handling).
+user_lebs = 3951
+provenance = "MEASURED: the test unit, u:inventory/20260915T014110Z/storage.txt /proc/mtd; u:inventory/20260915T014110Z/logs.txt ubi0 attach lines 124-131"
+
+# The stock layout is the measurement. Sizes are /proc/mtd bytes / leb_bytes, exact.
+[layouts.stock]
+volumes = [
+  {name = "factory", lebs = 34},
+  {name = "firmware", lebs = 19},
+  {name = "boot", lebs = 53},
+  {name = "rootfs", lebs = 133},
+  {name = "rootfs1", lebs = 133},
+  {name = "config", lebs = 34},
+  {name = "data", lebs = 3545},
+]
+
+# Never written by any layout, install or update: per-unit identity, the unit's
+# own bitstream and MCU images, its configuration, and its history.
+[rules]
+never_write = ["factory", "firmware", "config", "data"]
+
+# L1, first install: only the vendor's inactive root is replaced (DESIGN.md 7).
+[layouts.L1]
+replaces = ["rootfs1"]
+volumes = [
+  {name = "a_kernel", lebs = 44},
+  {name = "a_dtb", lebs = 1},
+  {name = "a_root", lebs = 86},
+  {name = "xtest", lebs = 2},
+]
+
+# L2, after stock is retired: stock boot and rootfs become slot B and rescue.
+[layouts.L2]
+replaces = ["rootfs1", "boot", "rootfs"]
+volumes = [
+  {name = "a_kernel", lebs = 44},
+  {name = "a_dtb", lebs = 1},
+  {name = "a_root", lebs = 86},
+  {name = "xtest", lebs = 2},
+  {name = "b_kernel", lebs = 44},
+  {name = "b_dtb", lebs = 1},
+  {name = "b_root", lebs = 86},
+  {name = "rescue", lebs = 55},
+]

@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Unit facts the design needs, each with a value and a source (#61).
+
+    tools/unit-facts check [FILE]
+
+A fact is measured when it has a value and a source (a capture path). Exit 0
+when every fact is measured, 1 when any is unmeasured or has a value with no
+source, 2 when the file holds no facts.
+"""
+import os, sys, tomllib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT = os.path.join(os.path.dirname(HERE), "os/board/rds-control/unit-facts.toml")
+if len(sys.argv) < 2 or sys.argv[1] != "check":
+    print(__doc__); sys.exit(64)
+with open(sys.argv[2] if len(sys.argv) > 2 else DEFAULT, "rb") as f:
+    facts = tomllib.load(f).get("fact", [])
+if not facts:
+    print("unit-facts: no facts: unmeasured"); sys.exit(2)
+bad = 0
+for x in facts:
+    v, s = str(x.get("value", "")).strip(), str(x.get("source", "")).strip()
+    tag = f"{x['q']} {x['key']}"
+    if not v:
+        print(f"UNMEASURED {tag}"); bad += 1
+    elif not s:
+        print(f"FAIL {tag}: value with no source"); bad += 1
+    else:
+        print(f"ok {tag} = {v}  ({s})")
+print(f"unit-facts: {len(facts) - bad} of {len(facts)} measured")
+sys.exit(1 if bad else 0)

@@ -1,0 +1,6 @@
+config BR2_PACKAGE_RDS_CANARY_PROBE
+	bool "rds-canary-probe (QEMU test apparatus only)"
+	depends on BR2_LINUX_KERNEL
+	help
+	  Test module for #51: calls the raw NAND driver hooks directly to
+	  measure the canary patch's inner checks. Never in a board image.

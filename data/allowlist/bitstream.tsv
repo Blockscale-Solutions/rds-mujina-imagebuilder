@@ -1,0 +1,6 @@
+# Known FPGA bitstream revisions for the RDS control board (#23, #4). Hashes only,
+# never bytes: the bitstream stays on the owner's unit. A file is known only when
+# its sha256 AND size match a row; its name counts for nothing. The revision is
+# our own label; u: is our unit capture directory, which is not public.
+# sha256	bytes	revision	source
+789e72a75f2c9dd9658e75207ae6074801a869c1c064c6dbc8a9d071ac0d8dd5	1544828	rev-A (the test unit's /firmware/soc_system.rbf, captured 2026-09-15)	MEASURED u:inventory/20260915T014110Z/storage.txt lines 111 (size) and 114 (sha256); pinned in #4

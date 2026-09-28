@@ -1,0 +1,10 @@
+#!/bin/sh
+# #51 T4: call the NAND driver hooks directly (a test module), past mtdcore's
+# read-only flag, so the patch's inner checks and H1/H2 are measured.
+. /usr/libexec/rds-test/lib.sh
+n=$(nand_mtd); [ -n "$n" ] || { echo "error=no-nandsim-device"; exit 0; }
+before=$(raw_hash $n)
+modprobe rds_canary_probe mtdname="$(sed -n "s/^$n: [0-9a-f]* [0-9a-f]* \"\(.*\)\"/\1/p" /proc/mtd)" >/dev/null 2>&1; load_rc=$?
+res=$(dmesg | sed -n 's/.*rds-canary-probe: //p' | tail -1)
+after=$(raw_hash $n); [ "$before" = "$after" ] && same=yes || same=no
+echo "dev=$n load_rc=$load_rc $res canary=$(said 'canary mode: ') $(chip_counts) raw_unchanged=$same"

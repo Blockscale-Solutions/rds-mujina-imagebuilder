@@ -1,0 +1,18 @@
+# The rds_control kernel, beyond socfpga_defconfig and the common fragment.
+# Audited against olddefconfig by #41.
+CONFIG_KERNEL_XZ=y
+# The root is squashfs on a UBI block device (DESIGN.md 7, #77).
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+# The FPGA blocks (#42, hw.toml): UIO for the chain UARTs, PWM and tacho;
+# mainline drivers for the FPGA I2C and GPIO (D4).
+CONFIG_UIO=y
+CONFIG_UIO_PDRV_GENIRQ=y
+CONFIG_I2C_ALTERA=y
+CONFIG_GPIO_ALTERA=y
+# A preemptible kernel: the chain UART gate's latency inputs hold only for
+# it, and 32-bit ARM cannot select PREEMPT_RT in 6.18 (#27, DESIGN 6.2).
+CONFIG_PREEMPT=y
+# The unit's config and data volumes are UBIFS, so the board kernel must mount
+# them; board/common pins new filesystems to format 4 while stock lives (#52).
+CONFIG_UBIFS_FS=y

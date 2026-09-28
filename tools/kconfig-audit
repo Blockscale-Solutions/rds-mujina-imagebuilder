@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Every kernel option a fragment requests must survive into the final .config (#41).
+
+    tools/kconfig-audit --fragment FILE [--fragment FILE ...] --config .config
+
+olddefconfig silently drops an option whose dependencies are not met, and
+silently keeps a default where a value was asked for. This makes both a
+failure. "# CONFIG_X is not set" in a fragment requires X to be absent or off
+in the result. Exit 0 all survive, 1 any lost or changed, 2 nothing requested.
+"""
+import argparse, re, sys
+
+SET = re.compile(r"^((?:CONFIG|BR2)_\w+)=(.*)$")
+OFF = re.compile(r"^# ((?:CONFIG|BR2)_\w+) is not set$")
+
+
+def parse(path):
+    out = {}
+    for line in open(path):
+        line = line.strip()
+        if m := SET.match(line):
+            out[m[1]] = m[2]
+        elif m := OFF.match(line):
+            out[m[1]] = "n"
+    return out
+
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--fragment", action="append", required=True)
+ap.add_argument("--config", required=True)
+a = ap.parse_args()
+want = {}
+for f in a.fragment:
+    want.update(parse(f))
+if not want:
+    print("kconfig-audit: fragments request nothing: unmeasured"); sys.exit(2)
+have = parse(a.config)
+bad = 0
+for k, v in sorted(want.items()):
+    got = have.get(k, "n")
+    if got != v:
+        print(f"LOST {k}: asked {v}, final config has {got}"); bad += 1
+print(f"kconfig-audit: {len(want) - bad} of {len(want)} requested options survived")
+sys.exit(1 if bad else 0)

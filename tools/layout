@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""UBI layout checker for the RDS control board (#20).
+
+    tools/layout check [FILE]          every layout fits the device and keeps the rules
+    tools/layout show  [FILE] LAYOUT   resolved volumes with bytes computed from LEBs
+
+A derived layout names the stock volumes it replaces; everything else is kept
+from stock, so each kept volume's size has exactly one home: the stock list.
+Exit 0 pass, 1 fail.
+"""
+import os, sys, tomllib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT = os.path.join(os.path.dirname(HERE), "os/board/rds-control/layout.toml")
+
+
+def resolve(cfg, name):
+    stock = cfg["layouts"]["stock"]["volumes"]
+    if name == "stock":
+        return list(stock)
+    lay = cfg["layouts"][name]
+    kept = [v for v in stock if v["name"] not in lay.get("replaces", [])]
+    return kept + list(lay["volumes"])
+
+
+def check(cfg):
+    errs, cap = [], cfg["device"]["user_lebs"]
+    stock_names = {v["name"] for v in cfg["layouts"]["stock"]["volumes"]}
+    never = set(cfg["rules"]["never_write"])
+    for name, lay in cfg["layouts"].items():
+        vols = resolve(cfg, name)
+        total = sum(v["lebs"] for v in vols)
+        print(f"{name}: {total} of {cap} LEB")
+        if total != cap:
+            errs.append(f"{name}: sums to {total} LEB, the device has {cap} with none free: "
+                        + ", ".join(f"{v['name']} {v['lebs']}" for v in vols))
+        for r in lay.get("replaces", []):
+            if r not in stock_names:
+                errs.append(f"{name}: replaces {r}, which is not a stock volume")
+            if r in never:
+                errs.append(f"{name}: replaces {r}, which is never written")
+        names = [v["name"] for v in vols]
+        for n in {n for n in names if names.count(n) > 1}:
+            errs.append(f"{name}: volume {n} appears twice")
+    for n in never - stock_names:
+        errs.append(f"rules: never_write names {n}, which is not a stock volume")
+    return errs
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("check", "show"):
+        print(__doc__); sys.exit(64)
+    path = sys.argv[2] if len(sys.argv) > 2 else DEFAULT
+    with open(path, "rb") as f:
+        cfg = tomllib.load(f)
+    if sys.argv[1] == "check":
+        errs = check(cfg)
+        for e in errs:
+            print("FAIL", e)
+        sys.exit(1 if errs else 0)
+    leb = cfg["device"]["leb_bytes"]
+    for v in resolve(cfg, sys.argv[3]):
+        print(f"{v['name']} {v['lebs']} LEB {v['lebs'] * leb} B")
+
+
+if __name__ == "__main__":
+    main()

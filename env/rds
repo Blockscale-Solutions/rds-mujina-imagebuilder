@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# The one entry point for the RDS build environment (#32, gate C1).
+#
+#   env/rds preflight|fetch|build|test|repro|release
+#
+# A verb runs the executable stages in env/stages.d/<verb>/ in name order.
+# Adding a stage is adding a file: the stage list is data, not code here.
+# Each stage follows the tests/run.sh contract: 0 pass, 1 fail, 2 unmeasured.
+# The first failing stage stops the verb, so nothing expensive runs after a
+# cheap check has failed; the stages not run are named. Any unmeasured stage
+# makes the verb unmeasured: a verb never reports a pass it did not measure.
+set -u
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+root=${RDS_STAGES:-$here/stages.d}
+verb=${1:-}
+case "$verb" in
+    preflight|fetch|build|test|repro|release) ;;
+    *) echo "usage: env/rds preflight|fetch|build|test|repro|release (got '${verb}')" >&2; exit 1 ;;
+esac
+shopt -s nullglob
+stages=()
+for s in "$root/$verb"/*; do [ -f "$s" ] && [ -x "$s" ] && stages+=("$s"); done
+if [ ${#stages[@]} -eq 0 ]; then
+    echo "[rds $verb] no stages in $root/$verb: unmeasured"; exit 2
+fi
+unmeasured=0
+for i in "${!stages[@]}"; do
+    s=${stages[$i]} name=$(basename "${stages[$i]}" .sh)
+    start=$SECONDS
+    "$s"; rc=$?
+    printf '[rds %s] %s: exit %d (%ds)\n' "$verb" "$name" "$rc" $((SECONDS - start))
+    case $rc in
+        0) ;;
+        2) unmeasured=1 ;;
+        *) for r in "${stages[@]:$((i + 1))}"; do printf '[rds %s] not run: %s\n' "$verb" "$(basename "$r" .sh)"; done
+           echo "[rds $verb] FAIL at $name"; exit 1 ;;
+    esac
+done
+if [ $unmeasured -eq 1 ]; then echo "[rds $verb] UNMEASURED: a stage could not measure"; exit 2; fi
+echo "[rds $verb] PASS"

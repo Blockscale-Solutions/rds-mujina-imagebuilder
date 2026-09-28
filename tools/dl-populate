@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Build Buildroot's offline download dir from the mirror (#36).
+
+    tools/dl-populate [--lock TSV] [--mirror DIR] --dl DIR
+
+Every lock row named <package>/<file> is hard-linked from mirror/<sha256> to
+DIR/<package>/<file> after its hash is checked. Rows without a package
+directory (Buildroot itself, signatures) are not placed. Anything in DIR the
+lock does not name is removed, so the offline build sees exactly the locked
+bytes. Exit 0 all placed, 1 on a missing or corrupt mirror entry.
+"""
+import argparse, hashlib, os, shutil, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__)); REPO = os.path.dirname(HERE)
+PROJECT = os.path.dirname(os.path.dirname(REPO))
+ap = argparse.ArgumentParser()
+ap.add_argument("--lock", default=os.path.join(REPO, "env/lock.tsv"))
+ap.add_argument("--mirror", default=os.path.join(PROJECT, "archive/mirror"))
+ap.add_argument("--dl", required=True)
+a = ap.parse_args()
+want, bad = {}, 0
+for l in open(a.lock):
+    if l.startswith("#") or not l.strip():
+        continue
+    h, size, name, url = l.rstrip("\n").split("\t")
+    if "/" in name:
+        want[name] = h
+os.makedirs(a.dl, exist_ok=True)
+for root, dirs, names in os.walk(a.dl):
+    for n in names:
+        rel = os.path.relpath(os.path.join(root, n), a.dl)
+        if rel not in want:
+            os.unlink(os.path.join(root, n))
+for name, h in sorted(want.items()):
+    src, dst = os.path.join(a.mirror, h), os.path.join(a.dl, name)
+    if not os.path.isfile(src) or hashlib.sha256(open(src, "rb").read()).hexdigest() != h:
+        print(f"FAIL {name}: mirror entry {h[:16]} missing or corrupt"); bad += 1; continue
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.exists(dst):
+        os.unlink(dst)
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+print(f"dl-populate: {len(want) - bad} of {len(want)} package files placed in {a.dl}")
+sys.exit(1 if bad else 0)

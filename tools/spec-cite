@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Check that every cited requirement id exists in the kernel-port spec (#18).
+
+    tools/spec-cite [--spec FILE] [DIR ...]
+
+Scans DIRs (default: ip/ and tests/ in this repo) for ids of the form
+REQ-<BLOCK>-<n> and looks each one up in the spec (default
+docs/spec/kernel-port-spec.md). Exit 0 when every cited id is present, 1 when
+any is missing or the spec is absent, 2 when nothing cites an id at all: a
+check that found nothing to check has measured nothing.
+"""
+import argparse, os, re, sys
+
+ID = re.compile(r"\bREQ-[A-Z0-9]+-\d+\b")
+repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ap = argparse.ArgumentParser()
+ap.add_argument("--spec", default=os.path.join(repo, "docs/spec/kernel-port-spec.md"))
+ap.add_argument("dirs", nargs="*", default=[os.path.join(repo, d) for d in ("ip", "tests")])
+a = ap.parse_args()
+
+cited = {}  # id -> first file:line
+for top in a.dirs:
+    for root, _, files in os.walk(top):
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    for n, line in enumerate(f, 1):
+                        for m in ID.findall(line):
+                            cited.setdefault(m, f"{os.path.relpath(path)}:{n}")
+            except OSError:
+                continue
+
+if not cited:
+    print(f"spec-cite: no requirement ids cited under {', '.join(a.dirs)}: unmeasured")
+    sys.exit(2)
+if not os.path.exists(a.spec):
+    print(f"spec-cite: spec not found: {a.spec} ({len(cited)} ids cited)")
+    sys.exit(1)
+present = set(ID.findall(open(a.spec, encoding="utf-8").read()))
+missing = sorted(i for i in cited if i not in present)
+for i in missing:
+    print(f"MISSING {i} cited at {cited[i]}")
+print(f"spec-cite: {len(cited)} cited, {len(cited) - len(missing)} found")
+sys.exit(1 if missing else 0)

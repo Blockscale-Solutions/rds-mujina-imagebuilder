@@ -1,0 +1,2 @@
+name: RDS_PLANT
+desc: test-only packages that must fail the build (#37, #38)

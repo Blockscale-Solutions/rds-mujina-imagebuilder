@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""A release's hash, taken only from a signature by a pinned key (#35).
+
+    tools/verify-release --key KEYRING --fingerprint FPR --sign SIGNFILE --name FILE --sha256 HASH
+
+The signed release note must verify under KEYRING alone, with the signing
+key's fingerprint equal to FPR (pinned in the repo), and the SHA256 line it
+signs for FILE must equal HASH (the lock's). Exit 0 when all hold, else 1.
+"""
+import argparse, re, subprocess, sys
+
+ap = argparse.ArgumentParser()
+for f in ("--key", "--fingerprint", "--sign", "--name", "--sha256"):
+    ap.add_argument(f, required=True)
+a = ap.parse_args()
+r = subprocess.run(["gpgv", "--status-fd", "1", "--keyring", a.key, a.sign], capture_output=True, text=True)
+sigs = re.findall(r"^\[GNUPG:\] VALIDSIG (\S+)", r.stdout, re.M)
+if r.returncode != 0 or not sigs:
+    print(f"verify-release: signature does not verify under {a.key}"); sys.exit(1)
+if a.fingerprint.upper() not in (s.upper() for s in sigs):
+    print(f"verify-release: signed by {sigs[0]}, pinned {a.fingerprint}"); sys.exit(1)
+text = open(a.sign).read().split("-----BEGIN PGP SIGNATURE-----")[0]
+# Two signed formats: Buildroot's "SHA256: <hash>  <file>" and kernel.org's "<hash>  <file>".
+m = re.search(r"^(?:SHA256:\s*)?([0-9a-f]{64})\s+" + re.escape(a.name) + r"\s*$", text, re.M)
+if not m:
+    print(f"verify-release: no SHA256 line for {a.name} in the signed text"); sys.exit(1)
+if m.group(1) != a.sha256.lower():
+    print(f"verify-release: signed sha256 {m.group(1)[:16]} differs from lock {a.sha256[:16]}"); sys.exit(1)
+print(f"verify-release: {a.name} sha256 {m.group(1)[:16]}... signed by pinned key {a.fingerprint[-16:]}")

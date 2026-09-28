@@ -1,0 +1,5 @@
+# The RDS control board: Cyclone V SoC.
+BR2_LINUX_KERNEL_DEFCONFIG="socfpga"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_RDS_PATH)/board/common/linux.fragment $(BR2_EXTERNAL_RDS_PATH)/board/rds-control/linux.fragment"
+# Our board tree (#42): mainline HPS include plus the FPGA include generated from hw.toml.
+BR2_LINUX_KERNEL_CUSTOM_DTS_PATH="$(BR2_EXTERNAL_RDS_PATH)/board/rds-control/rds-control.dts $(BR2_EXTERNAL_RDS_PATH)/board/rds-control/rds-fpga.dtsi"

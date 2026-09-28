@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Boot the rds_qemu image with a guest test and print its result line (#51).
+#
+#   tools/qemu-test NAME [extra kernel args...]
+#
+# Exit 0 with the RDSTEST line on stdout, 2 when no result appeared within the
+# time limit (unmeasured, never a pass). The console log is kept beside the image.
+set -u
+here=$(cd "$(dirname "$0")" && pwd); . "$here/../env/lib.sh"
+name=$1; shift
+q=$RDS_PROJECT/build/br-out/rds_qemu/images
+[ -s "$q/zImage" ] || { echo "no rds_qemu image: unmeasured"; exit 2; }
+mkdir -p "$RDS_TMPDIR"; sd=$(mktemp -p "$RDS_TMPDIR" qemu-sd.XXXXXX)
+cp "$q/rootfs.squashfs" "$sd"
+n=$(stat -c %s "$sd"); p=1048576; while [ $p -lt $n ]; do p=$((p * 2)); done; truncate -s $p "$sd"
+log=$RDS_PROJECT/build/br-out/rds_qemu/qemu-test-$name.log
+# vexpress-a9 cannot power itself off, so stop QEMU as soon as the result line
+# appears, by the PID started here, rather than waiting out the time limit.
+# RDS_QEMU_REBOOT=1 lets a guest reset reboot (a warm reset keeps RAM, for
+# pstore); RDS_QEMU_NET=1 adds a user-mode NIC (the host is 10.0.2.2) (#58).
+opts=(-no-reboot); [ "${RDS_QEMU_REBOOT:-0}" = 1 ] && opts=()
+[ "${RDS_QEMU_NET:-0}" = 1 ] && opts+=(-nic user,model=lan9118)
+qemu-system-arm -M vexpress-a9 -m 256 -nographic "${opts[@]}" \
+    -kernel "$q/zImage" -dtb "$q/vexpress-v2p-ca9.dtb" -drive "file=$sd,if=sd,format=raw,snapshot=on" \
+    -append "console=ttyAMA0 root=/dev/mmcblk0 rootfstype=squashfs ro panic=1 rds.test=$name $*" > "$log" 2>&1 < /dev/null &
+pid=$!
+end=$((SECONDS + ${RDS_QEMU_TIMEOUT:-120}))
+while [ $SECONDS -lt $end ] && kill -0 $pid 2>/dev/null; do
+    grep -a -q "^RDSTEST $name " "$log" && break
+    sleep 1
+done
+kill $pid 2>/dev/null; wait $pid 2>/dev/null
+rm -f "$sd"
+line=$(grep -a -m1 "^RDSTEST $name " "$log" | tr -d '\r')
+[ -n "$line" ] || { echo "no RDSTEST line for $name within the time limit: unmeasured (log $log)"; exit 2; }
+echo "$line"

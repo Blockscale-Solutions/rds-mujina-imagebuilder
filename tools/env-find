@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Find CRC-valid U-Boot environment copies in a raw flash dump (#25, Q-ENV).
+
+    tools/env-find DUMP [--align BYTES]
+
+An environment block is CRC32 (little-endian) over its data, then for the
+redundant layout one flag byte, then name=value pairs padded to the block
+size. Every aligned offset is tried against the common block sizes. Prints
+offset, size, layout and flag, and marks the active copy of a redundant pair by
+U-Boot's rule (the flag one past the other wins, wrapping at 255). It never
+prints the environment's contents: the dump stays where it was captured.
+Exit 0 when any copy is found, 1 when none is, 2 when the dump is empty.
+"""
+import argparse, sys, zlib
+
+SIZES = [0x1000, 0x2000, 0x4000, 0x8000, 0x10000, 0x20000, 0x40000]
+KEYCHARS = set(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+
+ap = argparse.ArgumentParser()
+ap.add_argument("dump")
+ap.add_argument("--align", type=lambda s: int(s, 0), default=0x800)
+a = ap.parse_args()
+buf = open(a.dump, "rb").read()
+if not buf:
+    print("env-find: empty dump: unmeasured"); sys.exit(2)
+
+found = []  # (offset, size, layout, flag)
+for off in range(0, len(buf), a.align):
+    for size in SIZES:
+        if off + size > len(buf):
+            break
+        crc = int.from_bytes(buf[off:off + 4], "little")
+        for layout, hdr in (("redundant", 5), ("single", 4)):
+            data = buf[off + hdr:off + size]
+            if data[0] in KEYCHARS and b"=" in data[:64] and zlib.crc32(data) == crc:
+                found.append((off, size, layout, buf[off + 4] if layout == "redundant" else None))
+
+active = set()
+red = [f for f in found if f[2] == "redundant"]
+for i, x in enumerate(red):
+    for y in red[i + 1:]:
+        if x[1] != y[1]:
+            continue
+        fx, fy = x[3], y[3]
+        if (fx + 1) & 0xff == fy:
+            win = y
+        elif (fy + 1) & 0xff == fx:
+            win = x
+        elif fx == fy:
+            win = x
+        else:
+            win = x if fx > fy else y
+        active.add(win[0])
+for off, size, layout, flag in found:
+    extra = f" flag {flag}" if layout == "redundant" else ""
+    mark = " ACTIVE" if off in active else ""
+    print(f"offset {off:#x} size {size:#x} {layout}{extra}{mark}")
+print(f"env-find: {len(found)} copies in {len(buf)} bytes")
+sys.exit(0 if found else 1)

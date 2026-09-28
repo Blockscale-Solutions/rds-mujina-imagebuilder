@@ -1,0 +1,17 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA256
+
+buildroot-2026.08.tar.xz released Fri, 04 Sep 2026 17:34:35 +0200
+
+SHA1: 3a100ff6dd1ebf50d6966be1e3dbdb0eeaf00cb7  buildroot-2026.08.tar.xz
+SHA256: 87aaca4164ea9d5c8085854953018263f7963f07c22e73a2a2185cc98c581c34  buildroot-2026.08.tar.xz
+
+To verify this signature, you can obtain the corresponding public
+key from https://buildroot.org/~jacmet/pubkey.gpg
+
+-----BEGIN PGP SIGNATURE-----
+
+iF0EAREIAB0WIQSrB9gG0s50H7iG7lCwJbqLWcNjGQUCaprlCwAKCRCwJbqLWcNj
+GVzpAJ9lyAX0ikvdA2/P/P++TgQWbqD/QACfa8aLLXYAcrnd17H79pRyRWI+Aco=
+=Cv7E
+-----END PGP SIGNATURE-----

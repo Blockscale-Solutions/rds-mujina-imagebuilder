@@ -1,0 +1,12 @@
+# Build container for the RDS image (#34, gate C18). Base pinned by digest,
+# apt pinned to one snapshot.debian.org timestamp, packages from packages.txt
+# only. Built by env/container.sh with --timestamp so rebuilds are identical.
+FROM docker.io/library/debian:trixie-slim@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+ARG SNAPSHOT=20260915T000000Z
+COPY packages.txt /tmp/packages.txt
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+ && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s trixie main\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/%s trixie-security main\n' "$SNAPSHOT" "$SNAPSHOT" > /etc/apt/sources.list \
+ && apt-get -o Acquire::Retries=3 update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $(cat /tmp/packages.txt) \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/* /var/cache/debconf/*-old /tmp/packages.txt /var/cache/ldconfig/aux-cache

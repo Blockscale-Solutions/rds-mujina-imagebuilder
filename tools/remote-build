@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Build on another machine (#95), for when this one cannot be trusted to
+# compile (the build host's RAM, 2026-09-28). Everything goes over by hash and is
+# checked again there: the repo at a commit (git archive; the remote needs no
+# git), the locked mirror (re-hashed by preflight 50-lock), and the build
+# image's filesystem. The build runs detached, as a transient systemd unit
+# with hard caps, so an out-of-memory kill lands on it, never on the host's VMs.
+#
+#   tools/remote-build prep   HOST DIR              send, check, run tests/root
+#   tools/remote-build run    HOST DIR [STAGE...]   prints the unit (default 05-buildroot-tree 20-rds_qemu 30-rds_control)
+#   tools/remote-build status HOST DIR UNIT         PASS, FAIL, RUNNING or ENDED-WITHOUT-MARKER
+#   tools/remote-build fetch  HOST DIR VARIANT      images.sha256 and images/ into build/remote/<host>/
+#
+# Env: RDS_REMOTE_MEM (10G), RDS_REMOTE_MEM_HIGH (8G), RDS_REMOTE_CPUS (0-7).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+. "$here/../env/lib.sh"
+cmd=${1:-} host=${2:-} dir=${3:-}
+[ -n "$cmd" ] && [ -n "$host" ] && [ -n "$dir" ] || { sed -n '9,12p' "$0" >&2; exit 64; }
+r() { ssh -o BatchMode=yes "$host" "$@"; }
+x=$RDS_PROJECT/build/xfer; mkdir -p "$x"
+put() { # local file, remote path: the bytes must hash the same at both ends
+    local h; h=$(sha256sum < "$1" | cut -d' ' -f1)
+    scp -q "$1" "$host:$2"
+    [ "$(r "sha256sum < '$2' | cut -d' ' -f1")" = "$h" ] || { echo "FAIL transit $(basename "$1"): hash differs on $host"; exit 1; }
+    echo "  $(basename "$1") ${h:0:16} identical at both ends"
+}
+case $cmd in
+prep)
+    [ -z "$(git -C "$RDS_REPO" status --porcelain)" ] || { echo "prep: the remote builds a commit; commit first"; exit 1; }
+    c=$(git -C "$RDS_REPO" rev-parse HEAD)
+    r "mkdir -p '$dir/git' '$dir/archive/mirror' '$dir/build/xfer' '$dir/build/logs'"
+    echo "repo at ${c:0:12}"
+    git -C "$RDS_REPO" archive --format=tar -o "$x/repo.tar" HEAD
+    put "$x/repo.tar" "$dir/build/xfer/repo.tar"
+    r "rm -rf '$dir/git/rdsmujina-env' && mkdir '$dir/git/rdsmujina-env' && tar -C '$dir/git/rdsmujina-env' -xf '$dir/build/xfer/repo.tar' && echo $c > '$dir/git/rdsmujina-env/.commit'"
+    # container.sh derives this from git, which the remote lacks.
+    git -C "$RDS_REPO" log -1 --format=%ct -- env/container | r "cat > '$dir/build/source-date-epoch'"
+    echo "mirror"
+    rsync -a --delete "$RDS_MIRROR/" "$host:$dir/archive/mirror/"
+    r "cd '$dir/git/rdsmujina-env' && env/stages.d/preflight/50-lock.sh"
+    echo "build image filesystem"
+    id=$("$RDS_REPO/env/container.sh" export "$x/rootfs.tar")
+    echo "  image ${id:0:16}"
+    put "$x/rootfs.tar" "$dir/build/xfer/rootfs.tar"
+    r "rm -rf '$dir/build/rootfs' && mkdir '$dir/build/rootfs' && tar --numeric-owner -xpf '$dir/build/xfer/rootfs.tar' -C '$dir/build/rootfs' && echo $id > '$dir/build/rootfs.image-id'"
+    rm -f "$x/rootfs.tar" "$x/repo.tar"
+    echo "runner tests on $host"
+    r "cd '$dir/git/rdsmujina-env' && RDS_ROOTFS='$dir/build/rootfs' tests/run.sh tests/root" ;;
+run)
+    shift 3; stages="${*:-05-buildroot-tree 20-rds_qemu 30-rds_control}"
+    unit=rds-build-$(date -u +%Y%m%dT%H%M%SZ); log=$dir/build/logs/$unit.log
+    r "systemd-run --unit=$unit --collect --no-block \
+        -p MemoryMax=${RDS_REMOTE_MEM:-10G} -p MemoryHigh=${RDS_REMOTE_MEM_HIGH:-8G} -p MemorySwapMax=0 \
+        -p AllowedCPUs=${RDS_REMOTE_CPUS:-0-7} -p CPUWeight=20 -p IOWeight=20 \
+        -p StandardOutput=append:$log -p StandardError=append:$log \
+        --working-directory='$dir/git/rdsmujina-env' \
+        --setenv=RDS_RUNNER=chroot --setenv=RDS_ROOTFS='$dir/build/rootfs' \
+        --setenv=SOURCE_DATE_EPOCH=\$(cat '$dir/build/source-date-epoch') \
+        bash -c 'cg=/sys/fs/cgroup\$(cut -d: -f3 /proc/self/cgroup); \
+            echo \"RDS-REMOTE CAPS memory.max=\$(cat \$cg/memory.max) memory.high=\$(cat \$cg/memory.high) cpus=\$(cat \$cg/cpuset.cpus.effective) nproc=\$(nproc)\"; \
+            [ \"\$(cat \$cg/memory.max)\" != max ] || { echo \"RDS-REMOTE CAPS MISSING FAIL\"; exit 1; }; \
+            for s in $stages; do env/stages.d/build/\$s.sh || { echo \"RDS-REMOTE STAGE \$s FAIL\"; exit 1; }; echo \"RDS-REMOTE STAGE \$s PASS\"; done; echo RDS-REMOTE ALL PASS'" >&2
+    echo "$unit" ;;
+status)
+    unit=${4:?unit}; log=$dir/build/logs/$unit.log
+    # Every terminal state, and a unit gone without a marker (killed, OOM).
+    st=$(r "systemctl is-active $unit 2>/dev/null || true")
+    last=$(r "grep -a '^RDS-REMOTE' '$log' 2>/dev/null | tail -1 || true")
+    case $last in
+        'RDS-REMOTE ALL PASS') echo PASS ;;
+        *FAIL) echo "FAIL ($last)" ;;
+        *) if [ "$st" = active ] || [ "$st" = activating ]; then echo "RUNNING (${last:-no stage done yet})"; else echo "ENDED-WITHOUT-MARKER (unit $st; last: ${last:-none})"; fi ;;
+    esac
+    r "tail -n 3 '$log' 2>/dev/null | cut -c1-200" ;;
+fetch)
+    v=${4:?variant}; dst=$RDS_PROJECT/build/remote/${host#*@}/$v; mkdir -p "$dst"
+    rsync -a "$host:$dir/build/br-out/$v/images.sha256" "$host:$dir/build/br-out/$v/images" "$dst/"
+    ( cd "$dst/images" && sha256sum -c ../images.sha256 ) ;;
+*) sed -n '9,12p' "$0" >&2; exit 64 ;;
+esac

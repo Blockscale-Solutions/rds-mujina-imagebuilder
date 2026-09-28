@@ -1,0 +1,2 @@
+# Files allowed to match a vendor hash, each with a reason (tools/deny-scan, #24).
+# sha256	reason

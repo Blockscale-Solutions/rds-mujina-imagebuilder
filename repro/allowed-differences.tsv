@@ -1,0 +1,2 @@
+# Differences R1 and R2 may accept, each with a reason (tools/repro-compare, #45).
+# path<TAB>reason. Empty: no difference is accepted yet.

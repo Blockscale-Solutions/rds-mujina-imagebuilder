@@ -1,0 +1,3 @@
+# Generated files: path<TAB>command that regenerates it (run from the repo root).
+# env/rds preflight fails when a file differs from its regeneration.
+os/board/rds-control/rds-fpga.dtsi	tools/hw2dts dtsi

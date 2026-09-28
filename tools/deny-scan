@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""No output may be byte-identical to a vendor file (#24, gate C14).
+
+    tools/deny-scan [--manifest TSV]... [--tree DIR]... [--exceptions TSV] OUTPUT...
+
+Sources of vendor hashes: manifests (sha256 in the first column, header rows
+ignored) and vendor trees hashed read-only on the fly, both read in place where
+their owner keeps them; nothing from them is copied here. They come from the
+caller: the options, or else RDS_DENY_MANIFEST and RDS_DENY_TREE, each a
+colon-separated list. There is no default, so with neither the scan has
+measured nothing and exits 2. Files under 64 B are skipped and counted. .git
+directories are skipped on both sides. An exception needs a reason. Exit 0
+clean, 1 on any vendor hash or a reasonless exception, 2 when no source or no
+output could be read.
+"""
+import argparse, hashlib, os, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+MIN = 64
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--manifest", action="append", default=[])
+ap.add_argument("--tree", action="append", default=[])
+ap.add_argument("--exceptions", default=os.path.join(os.path.dirname(HERE), "data/allowlist/deny-scan-exceptions.tsv"))
+ap.add_argument("outputs", nargs="+")
+a = ap.parse_args()
+if not a.manifest and not a.tree:
+    env = lambda k: [p for p in os.environ.get(k, "").split(":") if p]
+    a.manifest, a.tree = env("RDS_DENY_MANIFEST"), env("RDS_DENY_TREE")
+if not a.manifest and not a.tree:
+    print("deny-scan: no vendor hash source given (--manifest, --tree, or RDS_DENY_MANIFEST, RDS_DENY_TREE): unmeasured")
+    sys.exit(2)
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def files(top):
+    # Version-control metadata is never in an image, and the vendor tree's own
+    # .git holds git's public sample hooks, which would match every clone's.
+    for root, dirs, names in os.walk(top):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for n in names:
+            p = os.path.join(root, n)
+            if os.path.isfile(p) and not os.path.islink(p):
+                yield p
+
+
+deny, sources = {}, 0
+for m in a.manifest:
+    if not os.path.isfile(m):
+        print(f"source missing: {m}"); continue
+    sources += 1
+    for line in open(m, encoding="utf-8", errors="replace"):
+        h = line.split("\t", 1)[0].strip().lower()
+        if len(h) == 64 and all(c in "0123456789abcdef" for c in h):
+            deny.setdefault(h, os.path.basename(m))
+for t in a.tree:
+    if not os.path.isdir(t):
+        print(f"source missing: {t}"); continue
+    sources += 1
+    for p in files(t):
+        if os.path.getsize(p) >= MIN:
+            deny.setdefault(sha(p), f"tree {os.path.basename(t)}")
+if not sources or not deny:
+    print("deny-scan: no vendor hash source readable: unmeasured"); sys.exit(2)
+
+bad, exc = 0, {}
+if os.path.isfile(a.exceptions):
+    for line in open(a.exceptions):
+        if line.startswith("#") or not line.strip():
+            continue
+        h, _, why = line.rstrip("\n").partition("\t")
+        if not why.strip():
+            print(f"FAIL exception {h[:16]} has no reason"); bad += 1
+        else:
+            exc[h.strip()] = why.strip()
+
+scanned = skipped = 0
+for top in a.outputs:
+    if os.path.isfile(top):
+        batch, base = [top], os.path.dirname(top)
+    elif os.path.isdir(top):
+        batch, base = files(top), top
+    else:
+        print(f"output missing: {top}"); continue
+    for p in batch:
+        if os.path.getsize(p) < MIN:
+            skipped += 1; continue
+        scanned += 1
+        h, rel = sha(p), os.path.relpath(p, base)
+        if h in deny:
+            if h in exc:
+                print(f"EXCEPTED {rel}: {exc[h]}")
+            else:
+                print(f"VENDOR {rel} matches {deny[h]}"); bad += 1
+if not scanned:
+    print("deny-scan: no output files scanned: unmeasured"); sys.exit(2)
+print(f"deny-scan: {scanned} files scanned against {len(deny)} vendor hashes; skipped {skipped} file{'s' if skipped != 1 else ''} under {MIN} B; {bad} failure(s)")
+sys.exit(1 if bad else 0)

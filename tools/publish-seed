@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Seed a public repository from a private one: one squashed commit of the
+# committed HEAD, minus the paths .publish-exclude lists (#104).
+#
+#   tools/publish-seed <repo> <out-dir> [--gate <script>] [--tag <name>]
+#
+# The export is `git archive` of HEAD, never the working tree, and the exclude
+# list is read from HEAD too. .publish-exclude holds one path or glob per line,
+# relative to the repo root, with git's pathspec glob rules: `*` stays inside a
+# directory, `**` crosses directories, and a directory excludes everything
+# under it. Blank lines and lines starting with # are ignored. The list names
+# private files, so it never ships itself.
+#
+# Refused, exit 1, and nothing is written, when:
+#   - <out-dir> exists (a seed goes only into a new directory);
+#   - an exclude line matches no committed path: a renamed private file would
+#     ship while its stale line still read as protection;
+#   - a shipped file still carries the vendor-derived provenance marker (each
+#     line is named): such a fact is not ours to publish until it is measured;
+#   - the gate exits non-zero. It scans the export, before any .git exists;
+#     it is --gate, else RDS_PUBLISH_GATE from env/lib.sh;
+#   - the seed's tree differs from HEAD's minus the exclusions.
+#
+# Seeded, exit 0: <out-dir> holds a new repository with exactly one commit,
+# authored and committed as Ronald <ronald@reckless.systems>, with a fixed
+# message and the source HEAD's commit date, so one HEAD always gives the same
+# commit. --tag adds an annotated tag on it with the same identity and date
+# (this repo takes --tag v0.0.0, because tools/version derives from a v tag).
+# stdout is the new commit's tree hash; everything else goes to stderr.
+#
+# Unmeasured, exit 2: no gate to run, no repository or HEAD to export, or a
+# usage error.
+set -uo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$here/../env/lib.sh"   # RDS_PUBLISH_GATE
+
+say() { printf 'publish-seed: %s\n' "$*" >&2; }
+usage() { say "usage: tools/publish-seed <repo> <out-dir> [--gate <script>] [--tag <name>]"; exit 2; }
+
+IDENT_NAME=Ronald
+IDENT_EMAIL=ronald@reckless.systems
+SUBJECT="Initial public seed"
+BODY="One squashed commit of the cleaned tree. Issue references of the form #N refer to the tracker of a private predecessor repository."
+MARKER=VENDOR; MARKER+=-DERIVED   # split, so this file never carries the marker it looks for
+
+gate=$RDS_PUBLISH_GATE tag= pos=()
+while [ $# -gt 0 ]; do
+    case $1 in
+        --gate) [ $# -ge 2 ] || usage; gate=$2; shift 2 ;;
+        --tag) [ $# -ge 2 ] || usage; tag=$2; shift 2 ;;
+        -*) usage ;;
+        *) pos+=("$1"); shift ;;
+    esac
+done
+[ ${#pos[@]} -eq 2 ] || usage
+repo=${pos[0]} out=${pos[1]}
+
+# Git state from a caller (a hook, a test) must not redirect either repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
+
+# The cheapest disqualifiers first: nothing below them is worth running without them.
+if [ -e "$out" ] || [ -L "$out" ]; then say "refused: $out exists; a seed goes only into a new directory"; exit 1; fi
+parent=$(dirname -- "$out")
+[ -d "$parent" ] || { say "no directory $parent to create $out in: unmeasured"; exit 2; }
+[ -f "$gate" ] && [ -x "$gate" ] || { say "no executable gate at $gate: unmeasured"; exit 2; }
+[ -z "$tag" ] || git check-ref-format "refs/tags/$tag" || { say "not a valid tag name: $tag"; exit 2; }
+[ -d "$repo" ] || { say "no repository at $repo: unmeasured"; exit 2; }
+top=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null) && [ "$(cd "$top" && pwd -P)" = "$(cd "$repo" && pwd -P)" ] \
+    || { say "$repo is not the top of a git work tree: unmeasured"; exit 2; }
+git -C "$repo" rev-parse -q --verify 'HEAD^{commit}' >/dev/null || { say "$repo has no committed HEAD: unmeasured"; exit 2; }
+date=$(git -C "$repo" log -1 --format=%cI HEAD)
+
+refused=()
+work=$(mktemp -d); stage=
+trap 'rm -rf -- "$work"; [ -z "$stage" ] || rm -rf -- "$stage"' EXIT
+excluded=$work/excluded; : > "$excluded"
+# HEAD in a private index: ls-files matches git's glob pathspecs there, and
+# reading a tree into it writes no object, no ref and no working-tree file.
+GIT_INDEX_FILE=$work/index git -C "$repo" read-tree HEAD || { say "cannot read HEAD's tree: unmeasured"; exit 2; }
+
+# The exclude list, as committed. Each line must match at least one committed path.
+n=0 lines=0
+while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    pat=${raw#"${raw%%[![:space:]]*}"}; pat=${pat%"${pat##*[![:space:]]}"}
+    case $pat in '' | \#*) continue ;; esac
+    lines=$((lines + 1))
+    pat=${pat#/}
+    before=$(tr -cd '\0' < "$excluded" | wc -c)
+    GIT_INDEX_FILE=$work/index git -C "$repo" ls-files -z --cached -- ":(top,glob)$pat" >> "$excluded" \
+        || { say ".publish-exclude:$n: git cannot match '$pat': unmeasured"; exit 2; }
+    [ "$(tr -cd '\0' < "$excluded" | wc -c)" -gt "$before" ] \
+        || refused+=(".publish-exclude:$n: '$pat' matches no committed path")
+done < <(git -C "$repo" show HEAD:.publish-exclude 2>/dev/null)
+[ "$lines" -gt 0 ] || say "no exclude lines in HEAD:.publish-exclude: nothing excluded"
+printf '.publish-exclude\0' >> "$excluded"
+
+# Export HEAD, then drop the excluded paths.
+stage=$(mktemp -d "$parent/.publish-seed.XXXXXX") || { say "cannot stage beside $out: unmeasured"; exit 2; }
+git -C "$repo" archive --format=tar HEAD | tar -x -C "$stage" -f - || { say "git archive of HEAD failed: unmeasured"; exit 2; }
+while IFS= read -r -d '' p; do rm -f -- "$stage/$p"; done < "$excluded"
+find "$stage" -mindepth 1 -depth -type d -empty -delete
+
+# What ships must carry no vendor-derived fact.
+while IFS= read -r hit; do
+    refused+=("${hit#./}")
+done < <(cd "$stage" && grep -rnaF -- "$MARKER" . | cut -c1-240)
+
+gate_out=$("$gate" "$stage" 2>&1); gate_rc=$?
+if [ "$gate_rc" -ne 0 ]; then
+    refused+=("gate $gate exited $gate_rc")
+    printf '%s\n' "$gate_out" | head -60 | sed 's/^/    gate: /' >&2
+fi
+
+if [ ${#refused[@]} -gt 0 ]; then
+    for r in "${refused[@]}"; do say "REFUSED $r"; done
+    say "refused: ${#refused[@]} finding(s); nothing written to $out"
+    exit 1
+fi
+
+# One commit, one identity, the source HEAD's date, no user or system config.
+sg() {
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_AUTHOR_NAME=$IDENT_NAME GIT_AUTHOR_EMAIL=$IDENT_EMAIL GIT_AUTHOR_DATE=$date \
+    GIT_COMMITTER_NAME=$IDENT_NAME GIT_COMMITTER_EMAIL=$IDENT_EMAIL GIT_COMMITTER_DATE=$date \
+        git -C "$stage" -c commit.gpgsign=false -c tag.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+sg init -q -b main --template= || { say "git init failed: unmeasured"; exit 2; }
+sg add -A -f . && sg commit -q --no-verify -m "$SUBJECT" -m "$BODY" || { say "commit failed: unmeasured"; exit 2; }
+[ -z "$tag" ] || sg tag -a "$tag" -m "$tag" HEAD || { say "tag failed: unmeasured"; exit 2; }
+
+# The seed must be HEAD minus the exclusions, entry for entry (mode, blob, path).
+declare -A skip=()
+while IFS= read -r -d '' p; do skip[$p]=1; done < "$excluded"
+tree_lines() { # git-dir-args... -> "mode type sha<TAB>path" for every blob and link, sorted
+    "$@" ls-tree -r -z --full-tree HEAD | while IFS= read -r -d '' e; do
+        [ -z "${skip[${e#*$'\t'}]:-}" ] || continue
+        case ${e%%$'\t'*} in "160000 commit "*) continue ;; esac   # a submodule: git archive ships none
+        printf '%s\n' "$e"
+    done | sort
+}
+if ! diff <(tree_lines git -C "$repo") <(tree_lines sg) >&2; then
+    say "refused: the seed's tree differs from HEAD minus the exclusions (lines above); nothing written to $out"
+    exit 1
+fi
+
+chmod "$(printf '%o' $(( 0777 & ~0$(umask) )))" "$stage"   # mktemp made it private
+mv -T -- "$stage" "$out" || { say "could not move the seed to $out: unmeasured"; exit 2; }
+stage=
+tree=$(git -C "$out" rev-parse 'HEAD^{tree}')
+say "seeded $out: 1 commit $(git -C "$out" rev-parse --short HEAD), $(git -C "$out" ls-files | wc -l) files, dated $date${tag:+, tagged $tag}"
+printf '%s\n' "$tree"

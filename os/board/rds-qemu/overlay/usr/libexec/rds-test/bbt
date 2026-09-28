@@ -1,0 +1,9 @@
+#!/bin/sh
+# #51 T0/T1/T5: the bad block table, and whether userspace can change the flash.
+. /usr/libexec/rds-test/lib.sh
+n=$(nand_mtd); [ -n "$n" ] || { echo "error=no-nandsim-device bbt_written=$(said 'Bad block table written')"; exit 0; }
+before=$(raw_hash $n)
+e=$(flash_erase -q /dev/$n 0 1 2>&1); erase_rc=$?
+printf 'rds' > /tmp/w; w=$(nandwrite -q -p /dev/$n /tmp/w 2>&1); write_rc=$?
+after=$(raw_hash $n); [ "$before" = "$after" ] && same=yes || same=no
+echo "dev=$n bbt_written=$(said 'Bad block table written') canary=$(said 'canary mode: ') $(state $n) $(chip_counts) erase_rc=$erase_rc erase_layer=$(layer "$e") write_rc=$write_rc write_layer=$(layer "$w") raw_unchanged=$same refused_zero_arg=$(dmesg | grep 'invalid for parameter' | grep -q canary && echo yes || echo no)"

@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Two reproducibility manifests must match (#45).
+
+    tools/repro-compare [--allowed TSV] A B
+
+Manifest rows: type<TAB>path<TAB>mode<TAB>uid<TAB>gid<TAB>mtime<TAB>size<TAB>sha256
+(the first column is f file, d dir, l symlink, i image artifact). A path that
+differs, or exists in only one, fails, unless the allowed-differences file
+names it with a reason. Exit 0 identical, 1 differ, 2 empty manifests.
+"""
+import argparse, sys
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--allowed")
+ap.add_argument("a"); ap.add_argument("b")
+x = ap.parse_args()
+
+
+def load(p):
+    rows = {}
+    for l in open(p):
+        if l.strip():
+            f = l.rstrip("\n").split("\t")
+            rows[f[1]] = f
+    return rows
+
+
+A, B = load(x.a), load(x.b)
+if not A and not B:
+    print("repro-compare: both manifests empty: unmeasured"); sys.exit(2)
+allowed, bad = {}, 0
+if x.allowed:
+    for l in open(x.allowed):
+        if l.startswith("#") or not l.strip():
+            continue
+        path, _, why = l.rstrip("\n").partition("\t")
+        if not why.strip():
+            print(f"FAIL allowed difference {path} has no reason"); bad += 1
+        else:
+            allowed[path] = why.strip()
+cols = ["type", "path", "mode", "uid", "gid", "mtime", "size", "sha256"]
+for p in sorted(set(A) | set(B)):
+    a, b = A.get(p), B.get(p)
+    if a == b:
+        continue
+    if p in allowed:
+        print(f"ALLOWED {p}: {allowed[p]}"); continue
+    if not a or not b:
+        print(f"DIFFER {p}: only in {'B' if not a else 'A'}")
+    else:
+        d = [f"{cols[i]} {a[i]} -> {b[i]}" for i in range(len(cols)) if i < len(a) and a[i] != b[i]]
+        print(f"DIFFER {p}: " + "; ".join(d))
+    bad += 1
+print(f"repro-compare: {len(A)} vs {len(B)} entries, " + ("identical" if not bad else f"{bad} differ"))
+sys.exit(1 if bad else 0)

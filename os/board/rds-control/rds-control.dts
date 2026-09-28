@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * RDS control board (Cyclone V SoC), our own device tree (#42).
+ * The HPS side is mainline's socfpga_cyclone5.dtsi. The FPGA side is
+ * generated from hw.toml into rds-fpga.dtsi; edit hw.toml, never the include.
+ * No node hogs any GPIO line: which pin enables the supply is UNMEASURED, and
+ * the supply must never be switched by the device tree (tools/hw2dts check-dts).
+ */
+/dts-v1/;
+#include "intel/socfpga/socfpga_cyclone5.dtsi"
+#include "rds-fpga.dtsi"
+
+/ {
+	model = "RDS control board (BZM2)";
+	compatible = "blockscale,rds-control", "altr,socfpga-cyclone5", "altr,socfpga";
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		/* UIO binds the FPGA blocks we drive from userspace (#14). */
+		bootargs = "uio_pdrv_genirq.of_id=generic-uio";
+	};
+
+	aliases {
+		serial0 = &uart0;
+		ethernet0 = &gmac1;
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x40000000>;	/* 1 GiB, MEASURED u:inventory/20260915T014110Z/system.txt */
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * #58 (G7): an oops survives a warm reset in pstore. 32 MiB below the
+		 * top of RAM, clear of where U-Boot relocates itself (INFERRED).
+		 * Whether the SPL scrubs SDRAM for ECC on a warm reset is UNMEASURED
+		 * until #61; if it does, pstore survives only a kernel-initiated
+		 * reboot that skips the scrub, and this note must say so.
+		 */
+		ramoops@3e000000 {
+			compatible = "ramoops";
+			reg = <0x3e000000 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x20000>;
+		};
+	};
+};
+
+&uart0 { status = "okay"; };
+&mmc { status = "okay"; };
+&watchdog0 { status = "okay"; };
+&can1 { status = "okay"; };	/* the supply link, #72 */
+
+/* Second EMAC: the PHY at MDIO address 3 is MEASURED (stock boot log, PHY id
+ * 0181b8b1, u:inventory/20260915T014110Z/logs.txt), and the link came up there
+ * at 100 Mbit/s full duplex. MII mode is MEASURED: the booted device tree gives
+ * phy-mode "mii" on /sopc@0/ethernet@0xff702000 (u:inventory/readonly-measure-
+ * 20260928T201729Z/fdt.dts, #61). It implies the fabric carries the link, so the FPGA
+ * must be configured before Linux. */
+&gmac1 {
+	status = "okay";
+	phy-mode = "mii";
+	phy-handle = <&phy3>;
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		phy3: ethernet-phy@3 { reg = <3>; };
+	};
+};
+
+/* NAND stays disabled: a mainline NAND probe can write a bad-block table
+ * (DESIGN.md risk 1). It is enabled only by the canary work, #51 and #59. */

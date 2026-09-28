@@ -1,0 +1,243 @@
+# The RDS control board's FPGA-side blocks: the one home for their addresses,
+# sizes and interrupts (#42). tools/hw2dts generates the device-tree include
+# from this file and checks it: no overlaps, provenance on every fact, and a
+# MEASURED interrupt must equal the stock kernel's GIC hwirq minus 32.
+# Access: uio (driven from userspace, #14), mainline (a mainline driver, D4),
+# none (address reserved, no node). The bitstream decides all of this; the
+# unit's own bitstream is the only one we run.
+# Provenance: MEASURED names our capture of the stock unit (u: is our unit
+# capture directory, which is not public). A value no capture has measured yet
+# carries the vendor-derived tag and names the pass that will measure it; while
+# any does, tools/publish-seed keeps this repository from a public seed.
+
+[[block]]
+name = "chain-uart0"
+kind = "chain-uart"
+base = 0xc0050000
+size = 0x200
+access = "uio"
+reg_source = "MEASURED: stock boot log mapbase, u:inventory/20260915T014110Z/logs.txt"
+spi = 41
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 73
+note = "all three share one 4 KiB page (DERIVED from the measured bases). Receive depth and DMA use are UNMEASURED, so tools/uart-budget reports them rather than assume them (#27): three PL330 channels (GIC hwirq 136, 138, 140) took about 9,230 interrupts each in a capture made while mining, u:inventory/20260915T014110Z/system.txt, and none where the chain ports had not been opened, u:inventory/kernel-20260924/unit-kernel-facts.txt; which transfers they carried is not measured"
+
+[[block]]
+name = "chain-uart1"
+kind = "chain-uart"
+base = 0xc0050200
+size = 0x200
+access = "uio"
+reg_source = "MEASURED: stock boot log mapbase, u:inventory/20260915T014110Z/logs.txt"
+spi = 42
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 74
+
+[[block]]
+name = "chain-uart2"
+kind = "chain-uart"
+base = 0xc0050400
+size = 0x200
+access = "uio"
+reg_source = "MEASURED: stock boot log mapbase, u:inventory/20260915T014110Z/logs.txt"
+spi = 43
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 75
+
+[[block]]
+name = "pwm0"
+kind = "pwm"
+base = 0xff245000
+size = 0x20
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+
+[[block]]
+name = "pwm1"
+kind = "pwm"
+base = 0xff245020
+size = 0x20
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+
+[[block]]
+name = "pwm2"
+kind = "pwm"
+base = 0xff245040
+size = 0x20
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+
+[[block]]
+name = "pwm3"
+kind = "pwm"
+base = 0xff245060
+size = 0x20
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+
+[[block]]
+name = "tacho0"
+kind = "tacho"
+base = 0xff246000
+size = 0x40
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+spi = 57
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 89
+
+[[block]]
+name = "tacho1"
+kind = "tacho"
+base = 0xff246040
+size = 0x40
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+spi = 58
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 90
+
+[[block]]
+name = "tacho2"
+kind = "tacho"
+base = 0xff246080
+size = 0x40
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+spi = 59
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 91
+
+[[block]]
+name = "tacho3"
+kind = "tacho"
+base = 0xff2460c0
+size = 0x40
+access = "uio"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt; the stock kernel claims 0x10 at each base, and the size is the spacing between the measured bases, so the whole window up to the next block is ours"
+spi = 60
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 92
+
+[[block]]
+name = "fpga-i2c0"
+kind = "i2c"
+base = 0xff244000
+size = 0x40
+access = "mainline"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt"
+compatible = "altr,softip-i2c-v1.0"
+spi = 49
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 81
+
+[[block]]
+name = "fpga-i2c1"
+kind = "i2c"
+base = 0xff244040
+size = 0x40
+access = "mainline"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt"
+compatible = "altr,softip-i2c-v1.0"
+spi = 50
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 82
+
+[[block]]
+name = "fpga-i2c2"
+kind = "i2c"
+base = 0xff244080
+size = 0x40
+access = "mainline"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt"
+compatible = "altr,softip-i2c-v1.0"
+spi = 51
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 83
+
+[[block]]
+name = "fpga-i2c3"
+kind = "i2c"
+base = 0xff2440c0
+size = 0x40
+access = "mainline"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt"
+compatible = "altr,softip-i2c-v1.0"
+spi = 52
+trigger = "level-high"
+irq_source = "MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt"
+stock_hwirq = 84
+
+[[block]]
+name = "fpga-pio0"
+kind = "gpio"
+base = 0xff247000
+size = 0x100
+access = "mainline"
+reg_source = "MEASURED: /sopc@0/gpio@0xff247000 reg <0xff247000 0x100> in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+compatible = "altr,pio-1.0"
+spi = 61
+trigger = "edge-rising"
+irq_source = "MEASURED: interrupts <0 0x3d 1> (SPI 61, edge) in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+dt_interrupts = "0 0x3d 1"
+note = "the stock kernel shows three edge-triggered lines in use on an altera-gpio domain (MEASURED: stock /proc/interrupts, u:inventory/20260915T014110Z/system.txt)"
+
+[[block]]
+name = "fpga-pio1"
+kind = "gpio"
+base = 0xff247100
+size = 0x10
+access = "mainline"
+reg_source = "MEASURED: /sopc@0/gpio@0xff247100 reg <0xff247100 0x10> in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+compatible = "altr,pio-1.0"
+note = "the booted tree gives SPI 65, edge, which pio3 shares (MEASURED); not claimed here, because mainline gpio-altera chains its interrupt and a chained line cannot be shared; the booted device tree names this block altr,pio-2.0, and ours binds the mainline driver as altr,pio-1.0"
+
+[[block]]
+name = "fpga-pio2"
+kind = "gpio"
+base = 0xff247200
+size = 0x100
+access = "mainline"
+reg_source = "MEASURED: /sopc@0/gpio@0xff247200 reg <0xff247200 0x100> in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+compatible = "altr,pio-1.0"
+note = "the booted tree gives it no interrupt (MEASURED); the booted device tree names this block altr,pio-3.0, and ours binds the mainline driver as altr,pio-1.0"
+
+[[block]]
+name = "fpga-pio3"
+kind = "gpio"
+base = 0xff247300
+size = 0x10
+access = "mainline"
+reg_source = "MEASURED: /sopc@0/gpio@0xff247300 reg <0xff247300 0x10> in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+compatible = "altr,pio-1.0"
+note = "the booted tree gives SPI 65, edge, shared with pio1 (MEASURED); not claimed here, for the same reason; the booted device tree names this block altr,pio-4.0, and ours binds the mainline driver as altr,pio-1.0"
+
+[[block]]
+name = "fpga-pio4"
+kind = "gpio"
+base = 0xff247400
+size = 0x10
+access = "mainline"
+reg_source = "MEASURED: /sopc@0/gpio@0xff247400 reg <0xff247400 0x10> in u:inventory/readonly-measure-20260928T201729Z/fdt.dts, the booted device tree (fdt.dtb sha256 b52028aa…)"
+compatible = "altr,pio-1.0"
+note = "the booted tree gives it no interrupt (MEASURED); the booted device tree names this block altr,pio-5.0, and ours binds the mainline driver as altr,pio-1.0"
+
+[[block]]
+name = "sha256"
+kind = "sha256"
+base = 0xc0040000
+size = 0x100
+access = "none"
+reg_source = "MEASURED: stock /proc/iomem, u:inventory/kernel-20260924/unit-kernel-facts.txt"
+note = "present in the bitstream, not used; reserved so nothing maps over it"

@@ -1,0 +1,2 @@
+# Packages of ours are sourced here as they are added (package/*/Config.in).
+source "$BR2_EXTERNAL_RDS_PATH/package/rds-canary-probe/Config.in"

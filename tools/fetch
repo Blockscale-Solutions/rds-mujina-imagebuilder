@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Fetch every locked input into the mirror, verified; nothing else (#35, gate C3).
+
+    tools/fetch [--lock TSV] [--mirror DIR]          fetch missing entries
+    tools/fetch [--lock TSV] --check-urls FILE       every wanted URL must be locked
+
+Lock rows: sha256<TAB>bytes<TAB>name<TAB>url. A file lands in the mirror as
+<sha256> only after its size and hash match, via a temp file on the build
+TMPDIR and an atomic rename, so a failed fetch leaves nothing behind. An
+entry already present with the right hash is never fetched again. A body that
+looks like HTML is refused with its own message: dead mirrors answer 200 with
+a web page, and a bare hash mismatch would hide that. Exit 0 all good, 1 on
+any failure, 2 when the lock is absent or empty.
+"""
+import argparse, hashlib, os, sys, tempfile, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+PROJECT = os.path.dirname(os.path.dirname(REPO))
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--lock", default=os.environ.get("RDS_LOCK", os.path.join(REPO, "env/lock.tsv")))
+ap.add_argument("--mirror", default=os.environ.get("RDS_MIRROR", os.path.join(PROJECT, "archive/mirror")))
+ap.add_argument("--check-urls")
+a = ap.parse_args()
+
+if not os.path.isfile(a.lock):
+    print(f"fetch: no lock at {a.lock}: unmeasured"); sys.exit(2)
+rows = [l.rstrip("\n").split("\t") for l in open(a.lock) if l.strip() and not l.startswith("#")]
+if not rows:
+    print("fetch: lock is empty: unmeasured"); sys.exit(2)
+
+if a.check_urls:
+    locked = {r[3] for r in rows}
+    wanted = [u.strip() for u in open(a.check_urls) if u.strip()]
+    if not wanted:
+        print("fetch: no wanted URLs to check: unmeasured"); sys.exit(2)
+    missing = [u for u in wanted if u not in locked]
+    for u in missing:
+        print(f"UNLISTED {u}")
+    print(f"fetch: {len(wanted) - len(missing)} of {len(wanted)} wanted URLs are locked")
+    sys.exit(1 if missing else 0)
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for c in iter(lambda: f.read(1 << 20), b""):
+            h.update(c)
+    return h.hexdigest()
+
+
+os.makedirs(a.mirror, exist_ok=True)
+tmpdir = os.environ.get("RDS_TMPDIR", os.path.join(PROJECT, "build/tmp"))
+os.makedirs(tmpdir, exist_ok=True)
+bad = got = kept = 0
+for h, size, name, url in rows:
+    dest = os.path.join(a.mirror, h)
+    if os.path.isfile(dest) and sha(dest) == h:
+        kept += 1; continue
+    fd, tmp = tempfile.mkstemp(dir=tmpdir, prefix="fetch-")
+    try:
+        with os.fdopen(fd, "wb") as out, urllib.request.urlopen(url, timeout=60) as r:
+            ctype = r.headers.get("Content-Type", "")
+            first = r.read(512)
+            out.write(first)
+            while chunk := r.read(1 << 20):
+                out.write(chunk)
+        head = first.lstrip().lower()
+        if "text/html" in ctype or head.startswith((b"<!doctype html", b"<html")):
+            print(f"FAIL {name}: server answered HTML, not the file ({url})"); bad += 1; continue
+        n, d = os.path.getsize(tmp), sha(tmp)
+        if n != int(size) or d != h:
+            print(f"FAIL {name}: got {n} B sha256 {d[:16]}, lock says {size} B {h[:16]}"); bad += 1; continue
+        os.replace(tmp, dest); got += 1
+        print(f"fetched {name} ({n} B)")
+    except Exception as e:
+        print(f"FAIL {name}: {e}"); bad += 1
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+print(f"fetch: {got} fetched, {kept} already present, {bad} failed, of {len(rows)} locked")
+sys.exit(1 if bad else 0)

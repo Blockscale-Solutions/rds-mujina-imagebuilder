@@ -1,0 +1,106 @@
+# Facts from the unit that the design needs (DESIGN.md s10, batched in #61).
+# A fact is measured only with a value AND a source. `u:` = our capture
+# directory for the test unit (the Mujina port project's; not public). Filled from
+# tools/unit/readonly-measure.sh output once that project has run it on the unit.
+
+[[fact]]
+q = "Q-ECC"
+key = "nand.writesize"
+value = "2048"
+source = "u:inventory/20260915T014110Z/logs.txt:263-268"
+
+[[fact]]
+q = "Q-ECC"
+key = "nand.oobsize"
+value = "64"
+source = "u:inventory/20260915T014110Z/logs.txt:263-268"
+
+[[fact]]
+q = "Q-ECC"
+key = "nand.ecc_strength"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-ECC"
+key = "nand.ecc_step_size"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-ENV"
+key = "uboot.env_location"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-ENV"
+key = "uboot.env_redundant"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-ENV"
+key = "uboot.bootcmd"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-ENV"
+key = "uboot.fw_printenv_present"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-WDT"
+key = "watchdog.timeout"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-WDT"
+key = "watchdog.state_at_userspace"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-DT"
+key = "dt.capture"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-DT"
+key = "dt.emac1_phy_mode"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-UBI"
+key = "ubi.volume_ids_and_types"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-UBI"
+key = "ubi.user_lebs"
+value = "3951"
+source = "u:inventory/20260915T014110Z/storage.txt /proc/mtd; logs.txt:124-131 (available PEBs 0)"
+
+[[fact]]
+q = "Q-BOOT"
+key = "boot.volume_contents"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-FW"
+key = "firmware.hashes_after_0914_ota"
+value = ""
+source = ""
+
+[[fact]]
+q = "Q-CLK"
+key = "clk.summary"
+value = ""
+source = ""

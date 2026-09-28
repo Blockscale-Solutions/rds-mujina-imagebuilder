@@ -1,0 +1,9 @@
+# The QEMU test kernel: apparatus for hardware-free tests, never in a board image.
+# A simulated NAND chip for the flash tests (#51, #52).
+# /dev/mtdN needs no option: 6.18 always builds mtdchar into the MTD core.
+CONFIG_MTD_RAW_NAND=y
+CONFIG_MTD_NAND_NANDSIM=y
+# nandsim uses software Hamming ECC; without it the simulated chip fails to scan.
+CONFIG_MTD_NAND_ECC_SW_HAMMING=y
+# Test sensors: nandsim logs each program and erase it executes (pr_debug), counted by the guest.
+CONFIG_DYNAMIC_DEBUG=y

@@ -1,0 +1,297 @@
+From: Ronald <ronald@reckless.systems>
+Subject: [PATCH] mtd: rawnand: canary mode, refuse every write and never touch the BBT
+
+For the first boot of a new kernel on a unit whose flash must not change
+(rdsmujina-env #51). In canary mode no bad block table is built, scanned or
+written (bad blocks are read from their markers); every program, OOB write,
+erase and bad-block marking is refused with -EROFS at its entry point, and
+program and erase commands are refused again where every exec_op command is
+sent and at the Denali DMA page program; the MTD devices are read-only, so UBI
+attaches read-only; and the Denali controller holds WP# asserted, with a
+status sensor that reads bit 7 with WP# released and held.
+
+Canary mode is set by CONFIG_MTD_RAW_NAND_CANARY_DEFAULT or nand.canary=1,
+and nand.canary=0 cannot clear it (bool_enable_only).
+
+Signed-off-by: Ronald <ronald@reckless.systems>
+---
+diff -ruN a/drivers/mtd/nand/raw/denali.c b/drivers/mtd/nand/raw/denali.c
+--- a/drivers/mtd/nand/raw/denali.c
++++ b/drivers/mtd/nand/raw/denali.c
+@@ -712,6 +712,12 @@
+ {
+ 	struct denali_controller *denali = to_denali_controller(chip);
+ 
++	/* Page programs with hardware ECC bypass exec_op: refuse them here too. */
++	if (write && nand_canary_mode()) {
++		nand_canary_note_refusal("a Denali page program");
++		return -EROFS;
++	}
++
+ 	denali_select_target(chip, chip->cur_cs);
+ 
+ 	if (denali->dma_avail)
+@@ -1252,6 +1258,25 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * Canary sensor: read status with WP# released, then held. Bit 7 must
++	 * differ, or the pin is not wired or its polarity is not what this
++	 * driver assumes. Only READ STATUS is issued while WP# is released.
++	 */
++	if (nand_canary_mode()) {
++		u8 released = 0, held = 0;
++
++		nand_select_target(chip, 0);
++		iowrite32(WRITE_PROTECT__FLAG, denali->reg + WRITE_PROTECT);
++		nand_status_op(chip, &released);
++		iowrite32(0, denali->reg + WRITE_PROTECT);
++		nand_status_op(chip, &held);
++		nand_deselect_target(chip);
++		dev_warn(denali->dev,
++			 "canary mode: write-protect sensor: status 0x%02x released, 0x%02x held (bit 7 must differ)\n",
++			 released, held);
++	}
++
+ 	ret = mtd_device_register(mtd, NULL, 0);
+ 	if (ret) {
+ 		dev_err(denali->dev, "Failed to register MTD: %d\n", ret);
+@@ -1341,7 +1366,9 @@
+ 	iowrite32(CHIP_EN_DONT_CARE__FLAG, denali->reg + CHIP_ENABLE_DONT_CARE);
+ 	iowrite32(ECC_ENABLE__FLAG, denali->reg + ECC_ENABLE);
+ 	iowrite32(0xffff, denali->reg + SPARE_AREA_MARKER);
+-	iowrite32(WRITE_PROTECT__FLAG, denali->reg + WRITE_PROTECT);
++	/* Canary mode holds WP# asserted; otherwise release it as mainline does. */
++	iowrite32(nand_canary_mode() ? 0 : WRITE_PROTECT__FLAG,
++		  denali->reg + WRITE_PROTECT);
+ 
+ 	denali_clear_irq_all(denali);
+ 
+diff -ruN a/drivers/mtd/nand/raw/internals.h b/drivers/mtd/nand/raw/internals.h
+--- a/drivers/mtd/nand/raw/internals.h
++++ b/drivers/mtd/nand/raw/internals.h
+@@ -83,6 +83,7 @@
+ const struct nand_manufacturer_desc *nand_get_manufacturer_desc(u8 id);
+ int nand_bbm_get_next_page(struct nand_chip *chip, int page);
+ int nand_markbad_bbm(struct nand_chip *chip, loff_t ofs);
++int nand_canary_check_op(const struct nand_operation *op);
+ int nand_erase_nand(struct nand_chip *chip, struct erase_info *instr,
+ 		    int allowbbt);
+ void onfi_fill_interface_config(struct nand_chip *chip,
+@@ -139,6 +140,9 @@
+ 	if (WARN_ON(op->cs >= nanddev_ntargets(&chip->base)))
+ 		return -EINVAL;
+ 
++	if (nand_canary_check_op(op))
++		return -EROFS;
++
+ 	return chip->controller->ops->exec_op(chip, op, false);
+ }
+ 
+diff -ruN a/drivers/mtd/nand/raw/Kconfig b/drivers/mtd/nand/raw/Kconfig
+--- a/drivers/mtd/nand/raw/Kconfig
++++ b/drivers/mtd/nand/raw/Kconfig
+@@ -10,6 +10,16 @@
+ 
+ if MTD_RAW_NAND
+ 
++config MTD_RAW_NAND_CANARY_DEFAULT
++	bool "Start raw NAND in canary mode (all programs and erases refused)"
++	help
++	  For a kernel that must boot a unit without changing its flash:
++	  no bad block table is built, scanned or written, every program,
++	  OOB write, erase and bad-block marking is refused, the MTD devices
++	  are read-only, and controllers that can hold write-protect do.
++	  The same mode is set with nand.canary=1, and nand.canary=0 cannot
++	  turn it off. Say N unless this is a canary kernel.
++
+ comment "Raw/parallel NAND flash controllers"
+ 
+ config MTD_NAND_DENALI
+diff -ruN a/drivers/mtd/nand/raw/nand_base.c b/drivers/mtd/nand/raw/nand_base.c
+--- a/drivers/mtd/nand/raw/nand_base.c
++++ b/drivers/mtd/nand/raw/nand_base.c
+@@ -46,6 +46,60 @@
+ 
+ #include "internals.h"
+ 
++/*
++ * Canary mode, for the first boot of a new kernel on a unit whose flash must
++ * not change: no bad block table is scanned or written, and every program,
++ * erase and bad-block marking is refused. Set with nand.canary=1.
++ */
++static bool canary = IS_ENABLED(CONFIG_MTD_RAW_NAND_CANARY_DEFAULT);
++/* Enable-only: once on (by default or by nand.canary=1), a later nand.canary=0
++ * is refused and logged, so the last word on the command line cannot clear it. */
++module_param(canary, bool_enable_only, 0444);
++MODULE_PARM_DESC(canary, "Refuse all NAND writes and erases, and never scan or write a bad block table");
++
++static atomic_t canary_refusals = ATOMIC_INIT(0);
++
++bool nand_canary_mode(void)
++{
++	return canary;
++}
++EXPORT_SYMBOL_GPL(nand_canary_mode);
++
++void nand_canary_note_refusal(const char *what)
++{
++	atomic_inc(&canary_refusals);
++	pr_warn_ratelimited("canary mode: refused %s\n", what);
++}
++EXPORT_SYMBOL_GPL(nand_canary_note_refusal);
++
++/* The one place every exec_op command passes: refuse program and erase. */
++int nand_canary_check_op(const struct nand_operation *op)
++{
++	unsigned int i;
++
++	if (!canary)
++		return 0;
++
++	for (i = 0; i < op->ninstrs; i++) {
++		const struct nand_op_instr *instr = &op->instrs[i];
++
++		if (instr->type != NAND_OP_CMD_INSTR)
++			continue;
++
++		switch (instr->ctx.cmd.opcode) {
++		case NAND_CMD_SEQIN:
++		case NAND_CMD_PAGEPROG:
++		case NAND_CMD_CACHEDPROG:
++		case NAND_CMD_ERASE1:
++		case NAND_CMD_ERASE2:
++			nand_canary_note_refusal("a program or erase command");
++			return -EROFS;
++		}
++	}
++
++	return 0;
++}
++
+ static int nand_pairing_dist3_get_info(struct mtd_info *mtd, int page,
+ 				       struct mtd_pairing_info *info)
+ {
+@@ -570,6 +624,9 @@
+ 	struct mtd_info *mtd = nand_to_mtd(chip);
+ 	int res, ret = 0;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	if (!(chip->bbt_options & NAND_BBT_NO_OOB_BBM)) {
+ 		struct erase_info einfo;
+ 
+@@ -4323,6 +4380,9 @@
+ 	if (!writelen)
+ 		return 0;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	/* Reject writes, which are not page aligned */
+ 	if (NOTALIGNED(to) || NOTALIGNED(ops->len)) {
+ 		pr_notice("%s: attempt to write non page aligned data\n",
+@@ -4478,6 +4538,9 @@
+ 
+ 	ops->retlen = 0;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	nand_get_device(chip);
+ 
+ 	switch (ops->mode) {
+@@ -4533,6 +4596,9 @@
+ 	if (check_offs_len(chip, instr->addr, instr->len))
+ 		return -EINVAL;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	/* Check if the region is secured */
+ 	if (nand_region_is_secured(chip, instr->addr, instr->len))
+ 		return -EIO;
+@@ -6139,6 +6205,9 @@
+ 	unsigned int eb = nanddev_pos_to_row(nand, pos);
+ 	int ret;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	eb >>= nand->rowconv.eraseblock_addr_shift;
+ 
+ 	nand_select_target(chip, pos->target);
+@@ -6154,6 +6223,9 @@
+ 	struct nand_chip *chip = container_of(nand, struct nand_chip,
+ 					      base);
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	return nand_markbad_bbm(chip, nanddev_pos_to_offs(nand, pos));
+ }
+ 
+@@ -6422,6 +6494,13 @@
+ 	if (chip->options & NAND_ROM)
+ 		mtd->flags = MTD_CAP_ROM;
+ 
++	/* Canary mode: the MTD layer and UBI see a read-only device. */
++	if (nand_canary_mode()) {
++		mtd->flags &= ~MTD_WRITEABLE;
++		pr_warn("canary mode: %s is read-only; no bad block table is scanned or written; %d program or erase commands refused\n",
++			mtd->name ? mtd->name : "chip", atomic_read(&canary_refusals));
++	}
++
+ 	/* Fill in remaining MTD driver data */
+ 	mtd->_erase = nand_erase;
+ 	mtd->_point = NULL;
+diff -ruN a/drivers/mtd/nand/raw/nand_bbt.c b/drivers/mtd/nand/raw/nand_bbt.c
+--- a/drivers/mtd/nand/raw/nand_bbt.c
++++ b/drivers/mtd/nand/raw/nand_bbt.c
+@@ -755,6 +755,9 @@
+ 	uint8_t rcode = td->reserved_block_code;
+ 	size_t retlen, len = 0;
+ 	loff_t to;
++
++	if (nand_canary_mode())
++		return -EROFS;
+ 	struct mtd_oob_ops ops = { };
+ 
+ 	ops.ooblen = mtd->oobsize;
+@@ -1079,6 +1082,9 @@
+ 	struct nand_bbt_descr *td = this->bbt_td;
+ 	struct nand_bbt_descr *md = this->bbt_md;
+ 
++	if (nand_canary_mode())
++		return -EROFS;
++
+ 	if (!this->bbt || !td)
+ 		return -EINVAL;
+ 
+@@ -1398,6 +1404,10 @@
+ {
+ 	int ret;
+ 
++	/* Canary mode: no table in memory; bad blocks are read from the markers. */
++	if (nand_canary_mode())
++		return 0;
++
+ 	/* Is a flash based bad block table requested? */
+ 	if (this->bbt_options & NAND_BBT_USE_FLASH) {
+ 		/* Use the default pattern descriptors */
+diff -ruN a/include/linux/mtd/rawnand.h b/include/linux/mtd/rawnand.h
+--- a/include/linux/mtd/rawnand.h
++++ b/include/linux/mtd/rawnand.h
+@@ -1474,6 +1474,10 @@
+ 
+ int nand_create_bbt(struct nand_chip *chip);
+ 
++/* Canary mode: all NAND programs and erases refused (nand.canary=1). */
++bool nand_canary_mode(void);
++void nand_canary_note_refusal(const char *what);
++
+ /*
+  * Check if it is a SLC nand.
+  * The !nand_is_slc() can be used to check the MLC/TLC nand chips.

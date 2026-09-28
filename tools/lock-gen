@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Lock rows from Buildroot's show-info and the files actually downloaded (#35).
+
+    tools/lock-gen --dl DIR SHOW-INFO.json [SHOW-INFO.json ...]
+    tools/lock-gen --urls SHOW-INFO.json [...]     every download URL, one per line
+
+Prints sha256<TAB>bytes<TAB>dir/file<TAB>url, one row per download, merged
+across variants and sorted. The hash is of the bytes in DIR, never taken from
+metadata. Fails (exit 1) when a listed download is absent, or when DIR holds a
+file no package claims: both mean the lock would not describe the build.
+"""
+import argparse, hashlib, json, os, sys
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--dl")
+ap.add_argument("--urls", action="store_true", help="print download URLs only; needs no dl dir")
+ap.add_argument("info", nargs="+")
+a = ap.parse_args()
+
+
+OURS = "local+/w/os/"   # our BR2_EXTERNAL tree, versioned by git: not a download
+
+
+def ours(d):
+    uris = d.get("uris") or []
+    return bool(uris) and uris[0].startswith(OURS)
+
+
+def url_of(d):
+    uris, src = d.get("uris") or [], d.get("source")
+    uri = uris[0].split("+", 1)[1] if uris and "+" in uris[0] else (uris[0] if uris else "")
+    return f"{uri.rstrip('/')}/{src}"
+
+
+if a.urls:
+    seen = set()
+    for path in a.info:
+        for pkg in json.load(open(path)).values():
+            for d in pkg.get("downloads") or []:
+                if d.get("source") and not ours(d):
+                    seen.add(url_of(d))
+    print("\n".join(sorted(seen)))
+    sys.exit(0)
+if not a.dl:
+    ap.error("--dl is required unless --urls")
+
+on_disk = {}
+for root, _, names in os.walk(a.dl):
+    for n in names:
+        p = os.path.join(root, n)
+        rel = os.path.relpath(p, a.dl)
+        if rel.split(os.sep)[0].startswith(".") or n.endswith(".lock"):
+            continue
+        on_disk.setdefault(n, []).append(rel)
+
+rows, claimed, bad = {}, set(), 0
+for path in a.info:
+    for name, pkg in json.load(open(path)).items():
+        for d in pkg.get("downloads") or []:
+            src, uris = d.get("source"), d.get("uris") or []
+            if not src or ours(d):
+                continue
+            want = [pkg.get("dl_dir") or name, name[5:] if name.startswith("host-") else name]
+            cands = on_disk.get(src, [])
+            hit = next((c for w in want for c in cands if c.split(os.sep)[0] == w), cands[0] if cands else None)
+            if not hit:
+                print(f"MISSING {want[-1]}/{src} (package {name})", file=sys.stderr); bad += 1; continue
+            claimed.add(hit)
+            if hit in rows:
+                continue
+            f = os.path.join(a.dl, hit)
+            h = hashlib.sha256(open(f, "rb").read()).hexdigest()
+            rows[hit] = f"{h}\t{os.path.getsize(f)}\t{hit}\t{url_of(d)}"
+for n, rels in on_disk.items():
+    for r in rels:
+        if r not in claimed:
+            print(f"UNCLAIMED {r}: no package lists it", file=sys.stderr); bad += 1
+for k in sorted(rows):
+    print(rows[k])
+sys.exit(1 if bad else 0)

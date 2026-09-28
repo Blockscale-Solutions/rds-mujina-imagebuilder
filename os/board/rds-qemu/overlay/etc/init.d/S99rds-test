@@ -1,0 +1,11 @@
+#!/bin/sh
+# Guest test runner (QEMU image only): with rds.test=NAME on the kernel command
+# line, run /usr/libexec/rds-test/NAME, print its one result line to the
+# console prefixed RDSTEST, and power off. Without it, do nothing.
+[ "$1" = start ] || exit 0
+name=$(sed -n 's/.*rds\.test=\([A-Za-z0-9_-]*\).*/\1/p' /proc/cmdline)
+[ -n "$name" ] || exit 0
+t=/usr/libexec/rds-test/$name
+if [ -x "$t" ]; then out=$("$t" 2>&1 | tail -1); else out="error=no-such-test"; fi
+echo "RDSTEST $name $out" > /dev/console
+sync; poweroff -f
